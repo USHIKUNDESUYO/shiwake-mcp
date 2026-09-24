@@ -1,7 +1,7 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.USHIKUNDESUYO/shiwake-mcp",
-  "description": "Journal entry testing (JET) for accounting audits. Screens a general ledger against 11 rules and returns entries ordered by the sequence a human should review them in. Zero dependencies.",
+  "description": "Journal entry testing (JET) for accounting audits. 11 screening rules, zero dependencies.",
   "version": "0.1.0",
   "repository": {
     "url": "https://github.com/USHIKUNDESUYO/shiwake-mcp",
