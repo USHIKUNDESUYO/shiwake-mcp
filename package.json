@@ -38,7 +38,7 @@
   ],
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "node --test",
     "demo": "node bin/shiwake.js examples/journals.sample.json --fiscal-year-end 03-31 --approval-threshold 1000000"
   },
   "dependencies": {},
