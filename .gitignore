@@ -1,0 +1,13 @@
+node_modules/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# 実データは絶対に入れない。examples/ の合成データだけを置く。
+/data/
+*.csv
+*.xlsx
+journals.json
+!examples/journals.sample.json

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "shiwake": {
+      "command": "node",
+      "args": ["./src/server.js"]
+    }
+  }
+}

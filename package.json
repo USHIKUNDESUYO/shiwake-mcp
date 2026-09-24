@@ -1,0 +1,50 @@
+{
+  "name": "shiwake-mcp",
+  "version": "0.1.0",
+  "description": "仕訳データの一次スクリーニングを行う MCP サーバー。依存ライブラリなし。/ A dependency-free MCP server for journal entry testing (JET).",
+  "type": "module",
+  "license": "MIT",
+  "author": "Ushio Hoshino",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "accounting",
+    "audit",
+    "journal-entry-testing",
+    "benford",
+    "仕訳",
+    "監査",
+    "会計"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "shiwake-mcp": "src/server.js",
+    "shiwake": "bin/shiwake.js"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./rules": "./src/rules.js",
+    "./benford": "./src/benford.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "examples",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "demo": "node bin/shiwake.js examples/journals.sample.json --fiscal-year-end 03-31 --approval-threshold 1000000"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/USHIKUNDESUYO/shiwake-mcp.git"
+  }
+}
