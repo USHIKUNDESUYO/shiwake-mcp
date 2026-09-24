@@ -190,6 +190,12 @@ npm test
 
 48件のテストが走ります。MCP サーバーのテストは、子プロセスとして起こして実際に JSON-RPC を投げる経路で書いています。
 
+## 解説記事
+
+このサーバーを書いた経緯と設計の判断は、記事にしています。
+
+- [公認会計士が、依存ライブラリゼロでMCPサーバーを書いた](https://zenn.dev/ushikundesu/articles/shiwake-mcp-zero-dependency)
+
 ## ライセンス
 
 MIT
