@@ -120,7 +120,7 @@ The server makes no network calls. It reads stdin and writes stdout.
 npm test
 ```
 
-48 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
+51 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
 
 ## License
 
