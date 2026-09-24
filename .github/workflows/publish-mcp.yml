@@ -1,0 +1,57 @@
+name: publish-mcp
+
+# 公式MCPレジストリ（registry.modelcontextprotocol.io）への登録。
+# npm への公開は手元で行う。このワークフローは npm に載った版をレジストリに届けるだけで、
+# パッケージは作らない。手動で起動したときだけ動く。
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # GitHub OIDC で名前空間 io.github.USHIKUNDESUYO を証明する
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: server.json と package.json の食い違いを確認
+        run: |
+          node -e '
+            const s = require("./server.json");
+            const p = require("./package.json");
+            const versions = [p.version, s.version, ...s.packages.map((x) => x.version)];
+            if (new Set(versions).size !== 1) {
+              console.error("版が揃っていません:", versions.join(", "));
+              process.exit(1);
+            }
+            if (s.name !== p.mcpName) {
+              console.error("server.json の name と package.json の mcpName が違います");
+              process.exit(1);
+            }
+            console.log(s.name, p.version);
+          '
+
+      # レジストリは npm 上のパッケージの mcpName で所有を確かめる。載る前に登録しても弾かれる。
+      - name: npm に同じ版が公開されていることを確認
+        run: |
+          V=$(node -p 'require("./package.json").version')
+          GOT=$(npm view "shiwake-mcp@$V" mcpName 2>/dev/null || true)
+          if [ "$GOT" != "io.github.USHIKUNDESUYO/shiwake-mcp" ]; then
+            echo "npm に shiwake-mcp@$V が無いか、mcpName が入っていません（取得値: ${GOT:-なし}）"
+            exit 1
+          fi
+
+      # 依存ゼロのリポジトリなので、外から取ってくるバイナリは版とハッシュを固定する。
+      - name: mcp-publisher を取得（v1.8.1・SHA-256 固定）
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+
+      - name: レジストリに登録
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
