@@ -72,14 +72,18 @@ Claude Desktop の設定ファイルに追記します。
 {
   "mcpServers": {
     "shiwake": {
-      "command": "node",
-      "args": ["/path/to/shiwake-mcp/src/server.js"]
+      "command": "npx",
+      "args": ["-y", "shiwake-mcp"]
     }
   }
 }
 ```
 
 Claude Code の場合はプロジェクト直下の `.mcp.json` に同じ内容を書きます。
+
+`npx` がダウンロードするのは、このパッケージ1つだけです。依存がないので、ほかには何も入りません。
+
+クローンしたソースをそのまま動かす場合は、`command` を `node`、`args` を `["/path/to/shiwake-mcp/src/server.js"]` にします。
 
 ## ツール
 
@@ -196,7 +200,7 @@ CI は Node 20 / 22 / 24 で走ります。テストのほかに、依存が増�
 
 このサーバーを書いた経緯と設計の判断は、記事にしています。
 
-- [公認会計士が、依存ライブラリゼロでMCPサーバーを書いた](https://zenn.dev/ushikundesu/articles/shiwake-mcp-zero-dependency)
+- [会計士がMCPサーバーを書くと、依存ライブラリがゼロになる](https://zenn.dev/ushikundesu/articles/shiwake-mcp-zero-dependency)
 
 ## ライセンス
 

@@ -42,12 +42,16 @@ npm run demo
 {
   "mcpServers": {
     "shiwake": {
-      "command": "node",
-      "args": ["/path/to/shiwake-mcp/src/server.js"]
+      "command": "npx",
+      "args": ["-y", "shiwake-mcp"]
     }
   }
 }
 ```
+
+`npx` downloads this one package and nothing else, because there are no dependencies.
+
+To run a clone of this repository instead, set `command` to `node` and `args` to `["/path/to/shiwake-mcp/src/server.js"]`.
 
 ## Tools
 
