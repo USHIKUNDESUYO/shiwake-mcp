@@ -18,19 +18,40 @@ MCP の stdio トランスポートは、行区切りの JSON-RPC 2.0 です。S
 
 Node.js 20 以上が必要です。
 
+### MCP サーバーとして繋ぐ
+
+npm に公開しているので、`npx` で起動できます。事前のインストールは要りません。ダウンロードされるのはこのパッケージ1つだけです。依存がないので、ほかには何も入りません。
+
+Claude Code なら1行です。
+
 ```bash
-git clone https://github.com/USHIKUNDESUYO/shiwake-mcp.git
-cd shiwake-mcp
-npm test
+claude mcp add shiwake -- npx -y shiwake-mcp
 ```
 
-`npm install` は要りません。
+名前の前に `--scope project` を付けると、プロジェクト直下の `.mcp.json` に書き込まれ、チームで共有できます。
+
+Claude Desktop は設定ファイル（`claude_desktop_config.json`）に追記します。
+
+```json
+{
+  "mcpServers": {
+    "shiwake": {
+      "command": "npx",
+      "args": ["-y", "shiwake-mcp"]
+    }
+  }
+}
+```
+
+バージョンを固定したい場合は `shiwake-mcp@0.1.0` のように指定します。コードを読んでから動かしたい場合は、リポジトリを clone して `"command": "node"`、`"args": ["/path/to/shiwake-mcp/src/server.js"]` と直接指定してください。
 
 ### まず手元で試す
 
-同梱のサンプルデータ（合成データ383件、既知の異常を混ぜてあります）で挙動を確かめられます。
+リポジトリを clone すると、同梱のサンプルデータ（合成データ383件、既知の異常を混ぜてあります）で挙動を確かめられます。`npm install` は要りません。
 
 ```bash
+git clone https://github.com/USHIKUNDESUYO/shiwake-mcp.git
+cd shiwake-mcp
 npm run demo
 ```
 
@@ -63,27 +84,6 @@ npm run demo
 ```
 
 383件が25件に絞られます。スコアは各ルールの重要度の合計で、複数のルールに同時に当たった仕訳ほど上に来ます。
-
-### MCP サーバーとして繋ぐ
-
-Claude Desktop の設定ファイルに追記します。
-
-```json
-{
-  "mcpServers": {
-    "shiwake": {
-      "command": "npx",
-      "args": ["-y", "shiwake-mcp"]
-    }
-  }
-}
-```
-
-Claude Code の場合はプロジェクト直下の `.mcp.json` に同じ内容を書きます。
-
-`npx` がダウンロードするのは、このパッケージ1つだけです。依存がないので、ほかには何も入りません。
-
-クローンしたソースをそのまま動かす場合は、`command` を `node`、`args` を `["/path/to/shiwake-mcp/src/server.js"]` にします。
 
 ## ツール
 
