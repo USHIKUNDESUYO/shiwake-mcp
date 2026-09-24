@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -68,6 +69,16 @@ test('initialize がプロトコル版とサーバー情報を返す', async () 
   assert.equal(res.result.protocolVersion, '2025-06-18');
   assert.equal(res.result.serverInfo.name, 'shiwake-mcp');
   assert.ok(res.result.capabilities.tools);
+});
+
+test('initialize が名乗る版は package.json・server.json と一致する', async () => {
+  // 版は4か所に書いてある。1か所でも上げ忘れると、npm・レジストリ・クライアントで版が食い違う。
+  const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'));
+  const registry = JSON.parse(readFileSync(join(here, '..', 'server.json'), 'utf8'));
+  const [res] = await callServer([init], { expect: 1 });
+  assert.equal(res.result.serverInfo.version, pkg.version);
+  assert.equal(registry.version, pkg.version);
+  for (const p of registry.packages) assert.equal(p.version, pkg.version);
 });
 
 test('未対応のプロトコル版を要求されたら、対応している最新を返す', async () => {
