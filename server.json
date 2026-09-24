@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.USHIKUNDESUYO/shiwake-mcp",
+  "description": "Journal entry testing (JET) for accounting audits. Screens a general ledger against 11 rules and returns entries ordered by the sequence a human should review them in. Zero dependencies.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/USHIKUNDESUYO/shiwake-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://zenn.dev/ushikundesu/articles/shiwake-mcp-zero-dependency",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "shiwake-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

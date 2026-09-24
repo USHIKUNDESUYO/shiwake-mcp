@@ -1,5 +1,6 @@
 {
   "name": "shiwake-mcp",
+  "mcpName": "io.github.USHIKUNDESUYO/shiwake-mcp",
   "version": "0.1.0",
   "description": "仕訳データの一次スクリーニングを行う MCP サーバー。依存ライブラリなし。/ A dependency-free MCP server for journal entry testing (JET).",
   "type": "module",
