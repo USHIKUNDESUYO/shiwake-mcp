@@ -13,6 +13,7 @@ const SEVERITY_SCORE = { high: 10, medium: 5, low: 2 };
 const DEFAULT_OPTIONS = {
   businessHours: [9, 18],
   holidays: [],
+  exemptMonthEnd: true,
   approvalThresholds: [],
   thresholdMarginRatio: 0.05,
   fiscalYearEnd: null,
@@ -59,6 +60,11 @@ function fiscalYearEndFor(dateObj, mmdd) {
   const y = dateObj.getUTCFullYear();
   const sameYear = new Date(Date.UTC(y, mm - 1, dd));
   return dateObj <= sameYear ? sameYear : new Date(Date.UTC(y + 1, mm - 1, dd));
+}
+
+/** その日が月末日か。翌日が別の月になるかで見る（うるう年は2月29日が月末になる）。 */
+function isMonthEnd(dateObj) {
+  return new Date(dateObj.getTime() + 86400000).getUTCMonth() !== dateObj.getUTCMonth();
 }
 
 const RULES = [
@@ -254,7 +260,7 @@ const RULES = [
     title: '休日の計上',
     severity: 'low',
     rationale:
-      '土日および指定された休日に計上された仕訳。通常の業務サイクルの外で処理されている。',
+      '土日および指定された休日に計上された仕訳。通常の業務サイクルの外で処理されている。月末日付の仕訳は既定で対象から外す（月次・期末の整理仕訳は、土日でも月末の日付で計上されることが多いため）。',
     run(entries, o) {
       const holidays = new Set(o.holidays);
       const out = [];
@@ -263,6 +269,8 @@ const RULES = [
         const isWeekend = dow === 0 || dow === 6;
         const isHoliday = holidays.has(e.date);
         if (!isWeekend && !isHoliday) continue;
+        // 3月31日が日曜の年でも、決算整理仕訳は3月31日付で入る。これを休日の計上として数えると、期末の整理が全部当たる。
+        if (o.exemptMonthEnd && isMonthEnd(e.dateObj)) continue;
         const label = isHoliday ? `休日（${e.date}）の計上です` : `${dow === 0 ? '日曜' : '土曜'}の計上です`;
         out.push(finding('weekend_or_holiday', 'low', e, label, { dayOfWeek: dow, isWeekend, isHoliday }));
       }

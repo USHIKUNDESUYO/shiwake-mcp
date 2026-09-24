@@ -67,6 +67,10 @@ const optionsSchema = {
       description: '業務時間 [開始時, 終了時]。既定は [9, 18]。',
     },
     holidays: { type: 'array', items: { type: 'string' }, description: '休日の配列 (YYYY-MM-DD)。土日は自動で判定するため、それ以外を渡す。' },
+    exemptMonthEnd: {
+      type: 'boolean',
+      description: '月末日付の仕訳を「休日の計上」から外す。既定は true。月次・期末の整理仕訳は、土日でも月末の日付で計上されることが多いため。',
+    },
     approvalThresholds: { type: 'array', items: { type: 'number' }, description: '承認限度額の配列。この直下に張り付く仕訳を検出する。' },
     thresholdMarginRatio: { type: 'number', description: '限度額の何割下までを「直下」とみなすか。既定は 0.05。' },
     periodEndWindowDays: { type: 'number', description: '期末の何日前までを対象にするか。既定は 5。' },

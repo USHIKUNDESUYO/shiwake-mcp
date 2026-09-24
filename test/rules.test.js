@@ -124,6 +124,31 @@ test('weekend_or_holiday: 土日と、指定した休日を拾う', () => {
   assert.deepEqual(found, ['SAT', 'SUN', 'NYD']);
 });
 
+// 月末かどうかの境い目を並べる。2032年はうるう年で、2月28日（土）は月末ではなく、2月29日（日）が月末になる。
+const monthEndCases = [
+  { ...base, id: 'FYE_SUN', date: '2024-03-31' }, // 日曜・期末
+  { ...base, id: 'PREV_SAT', date: '2024-03-30' }, // 土曜・月末ではない
+  { ...base, id: 'HALF_SAT', date: '2023-09-30' }, // 土曜・中間期末
+  { ...base, id: 'FEB_SAT', date: '2026-02-28' }, // 土曜・平年の月末
+  { ...base, id: 'LEAP28_SAT', date: '2032-02-28' }, // 土曜・うるう年なので月末ではない
+  { ...base, id: 'LEAP29_SUN', date: '2032-02-29' }, // 日曜・うるう年の月末
+  { ...base, id: 'HOL_END', date: '2026-04-30' }, // 休日に指定した月末
+  { ...base, id: 'HOL_MID', date: '2026-04-29' }, // 休日に指定した月の途中
+];
+
+test('weekend_or_holiday: 月末日付の仕訳は既定で拾わない', () => {
+  const found = hits(monthEndCases, 'weekend_or_holiday', { holidays: ['2026-04-29', '2026-04-30'] });
+  assert.deepEqual(found, ['PREV_SAT', 'LEAP28_SAT', 'HOL_MID']);
+});
+
+test('weekend_or_holiday: exemptMonthEnd を false にすると月末も拾う', () => {
+  const found = hits(monthEndCases, 'weekend_or_holiday', {
+    holidays: ['2026-04-29', '2026-04-30'],
+    exemptMonthEnd: false,
+  });
+  assert.deepEqual(found, ['FYE_SUN', 'PREV_SAT', 'HALF_SAT', 'FEB_SAT', 'LEAP28_SAT', 'LEAP29_SUN', 'HOL_END', 'HOL_MID']);
+});
+
 test('after_hours: 業務時間の外で入力されたものを拾う', () => {
   const found = hits(
     [

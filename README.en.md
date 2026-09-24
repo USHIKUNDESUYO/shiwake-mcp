@@ -83,6 +83,8 @@ Entries accept either a simple form (`debit_account` / `credit_account` / `amoun
 
 `threshold_avoidance` and `period_end_large` stay dormant unless `approvalThresholds` and `fiscalYearEnd` are supplied. A rule firing blindly produces false positives, so it stops explicitly instead.
 
+`weekend_or_holiday` skips entries dated on the last day of a month by default. Month-end and period-end adjustments usually carry the month-end date even when it falls on a weekend; in a year when March 31 is a Sunday, every year-end adjustment would otherwise be flagged. Pass `exemptMonthEnd: false` to include them.
+
 ## On Benford analysis
 
 MAD thresholds follow Nigrini, M. J. *Benford's Law* (Wiley, 2012), Table 5.1. These are widely used in practice but are not set by any law or auditing standard.
