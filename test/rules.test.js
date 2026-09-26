@@ -83,6 +83,22 @@ test('duplicate: 同一条件のものを全件、相方のIDつきで返す', (
   assert.deepEqual(result.findings[0].detail.siblingIds, ['D2']);
 });
 
+test('duplicate: 明細の行の順番だけが違う同じ仕訳も重複として拾う', () => {
+  const lines = [
+    { account: '外注費', debit: 1000000 },
+    { account: '仮払消費税', debit: 100000 },
+    { account: '買掛金', credit: 1100000 },
+  ];
+  const found = hits(
+    [
+      { id: 'A', date: '2026-02-10', lines },
+      { id: 'B', date: '2026-02-10', lines: [lines[1], lines[0], lines[2]] },
+    ],
+    'duplicate'
+  );
+  assert.deepEqual(found, ['A', 'B']);
+});
+
 test('backdated: 既定の30日を超えた入力だけを拾う', () => {
   const found = hits(
     [
@@ -122,6 +138,25 @@ test('weekend_or_holiday: 土日と、指定した休日を拾う', () => {
     { holidays: ['2026-01-01'] }
   );
   assert.deepEqual(found, ['SAT', 'SUN', 'NYD']);
+});
+
+test('weekend_or_holiday: 休日を渡さなくても日本の祝日を拾い、祝日名を添える', () => {
+  const entries = normalizeJournals([
+    { ...base, id: 'WED', date: '2026-01-14' },
+    { ...base, id: 'COMING_OF_AGE', date: '2026-01-12' }, // 成人の日（月曜）
+    { ...base, id: 'CITIZENS', date: '2026-09-22' }, // 国民の休日（火曜）
+  ]);
+  const result = screen(entries, { rules: ['weekend_or_holiday'] });
+  assert.deepEqual(result.findings.map((f) => f.entryId), ['COMING_OF_AGE', 'CITIZENS']);
+  assert.equal(result.findings[0].detail.holidayName, '成人の日');
+  assert.match(result.findings[0].message, /祝日（成人の日・2026-01-12）/);
+});
+
+test('weekend_or_holiday: japaneseHolidays を false にすると祝日は見ない', () => {
+  const found = hits([{ ...base, id: 'COMING_OF_AGE', date: '2026-01-12' }], 'weekend_or_holiday', {
+    japaneseHolidays: false,
+  });
+  assert.deepEqual(found, []);
 });
 
 // 月末かどうかの境い目を並べる。2032年はうるう年で、2月28日（土）は月末ではなく、2月29日（日）が月末になる。
@@ -195,6 +230,37 @@ test('rare_account_pair: 母集団が十分なら稀な組み合わせを拾う'
   const journals = [{ ...base, id: 'RARE', debit_account: '役員貸付金', credit_account: '現金' }];
   for (let i = 0; i < 60; i += 1) journals.push({ ...base, id: `N${i}` });
   assert.deepEqual(hits(journals, 'rare_account_pair'), ['RARE']);
+});
+
+test('rare_account_pair: 明細の行の順番が違っても同じ組み合わせとして数える', () => {
+  const lines = [
+    { account: '外注費', debit: 100000 },
+    { account: '仮払消費税', debit: 10000 },
+    { account: '買掛金', credit: 110000 },
+  ];
+  // 1件だけ行の順番を変える。順番で組み合わせを数えると、この1件が「稀」になってしまう
+  const journals = [];
+  for (let i = 0; i < 60; i += 1) {
+    const ordered = i === 0 ? [lines[1], lines[0], lines[2]] : lines;
+    journals.push({ ...base, id: `N${i}`, lines: ordered });
+  }
+  assert.deepEqual(hits(journals, 'rare_account_pair'), []);
+});
+
+test('読めない仕訳を除外して index が飛んでも、上位の一覧は入力の仕訳を指す', () => {
+  const [first, , third] = normalizeJournals([
+    { ...base, id: 'KEEP1', description: '' },
+    { ...base, id: 'DROPPED' },
+    { ...base, id: 'KEEP2', created_by: 'x', approved_by: 'x' },
+  ]);
+  const result = screen([first, third], { rules: ['self_approval', 'missing_description'] });
+  assert.deepEqual(
+    result.ranked.map((r) => [r.entryId, r.entryIndex]),
+    [
+      ['KEEP2', 2],
+      ['KEEP1', 0],
+    ]
+  );
 });
 
 test('スコアは重要度の合計で、高い順に並ぶ', () => {

@@ -119,4 +119,35 @@ function normalizeJournals(journals) {
   return journals.map((e, i) => normalizeEntry(e, i));
 }
 
-export { normalizeJournals, normalizeEntry, parseDate, parseEnteredAt, JournalError };
+/**
+ * 読めない仕訳を除外して、読めたものだけを返す。既定の normalizeJournals は1件でも読めなければ止まる。
+ * 除外したものは、入力の何件目か・伝票番号・理由を添えて skipped に返す。
+ * 読めた仕訳の index は入力の位置のまま保つので、検出結果の「何件目」は入力と一致する。
+ */
+function normalizeJournalsSkippingInvalid(journals) {
+  if (!Array.isArray(journals)) throw new JournalError('journals は配列で指定してください');
+  if (journals.length === 0) throw new JournalError('journals が空です');
+  const entries = [];
+  const skipped = [];
+  journals.forEach((e, i) => {
+    try {
+      entries.push(normalizeEntry(e, i));
+    } catch (err) {
+      if (!(err instanceof JournalError)) throw err;
+      skipped.push({ index: i, id: e?.id ?? e?.voucher_no ?? null, reason: err.message });
+    }
+  });
+  if (entries.length === 0) {
+    throw new JournalError(`読める仕訳が1件もありません（${skipped.length} 件すべてを除外しました。例: ${skipped[0].reason}）`);
+  }
+  return { entries, skipped };
+}
+
+export {
+  normalizeJournals,
+  normalizeJournalsSkippingInvalid,
+  normalizeEntry,
+  parseDate,
+  parseEnteredAt,
+  JournalError,
+};

@@ -8,7 +8,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import { normalizeJournals, JournalError } from '../src/journal.js';
+import { normalizeJournals, normalizeJournalsSkippingInvalid, JournalError } from '../src/journal.js';
 import { screen, RULE_INDEX } from '../src/rules.js';
 
 const USAGE = `
@@ -20,6 +20,8 @@ const USAGE = `
   --business-hours <開始-終了>   業務時間。既定は 9-18。
   --top <件数>                   表示件数。既定は 20。
   --rules <id,id,...>            適用するルールを絞る。
+  --no-japanese-holidays         日本の祝日を休日として扱わない（土日だけを見る）。
+  --skip-invalid                 読めない行を除外して続ける。既定は1件でも読めなければ止める。
   --json                         結果を JSON でそのまま出す。
   --help                         この表示。
 `.trim();
@@ -52,6 +54,12 @@ function parseArgs(argv) {
       case '--rules':
         opts.rules = next().split(',').map((s) => s.trim());
         break;
+      case '--no-japanese-holidays':
+        opts.japaneseHolidays = false;
+        break;
+      case '--skip-invalid':
+        opts.skipInvalid = true;
+        break;
       case '--json':
         opts.json = true;
         break;
@@ -65,12 +73,13 @@ function parseArgs(argv) {
 
 const SEVERITY_MARK = { high: '!!', medium: '! ', low: '  ' };
 
-function render(result, top) {
+function render(result, top, skipped) {
   const s = result.summary;
   const lines = [];
 
   lines.push('');
   lines.push(`検査対象   ${s.entryCount} 件`);
+  if (skipped.length > 0) lines.push(`除外       ${skipped.length} 件（読めない行。例: ${skipped[0].reason}）`);
   lines.push(`検出       ${s.findingCount} 件 / 対象仕訳 ${s.flaggedEntryCount} 件`);
   lines.push(`重要度     high ${s.bySeverity.high} / medium ${s.bySeverity.medium} / low ${s.bySeverity.low}`);
 
@@ -126,16 +135,20 @@ function main() {
   const journals = Array.isArray(raw) ? raw : raw.journals;
 
   try {
-    const entries = normalizeJournals(journals);
+    const { entries, skipped } = parsed.opts.skipInvalid
+      ? normalizeJournalsSkippingInvalid(journals)
+      : { entries: normalizeJournals(journals), skipped: [] };
     const result = screen(entries, parsed.opts);
     if (parsed.opts.json) {
-      console.log(JSON.stringify(result, null, 2));
+      const out = skipped.length > 0 ? { ...result, invalidRowCount: skipped.length, invalidRows: skipped } : result;
+      console.log(JSON.stringify(out, null, 2));
     } else {
-      console.log(render(result, parsed.opts.top));
+      console.log(render(result, parsed.opts.top, skipped));
     }
   } catch (err) {
     if (err instanceof JournalError) {
-      console.error(`入力データを読めませんでした。${err.message}`);
+      const hint = err.index === undefined ? '' : '\n読めない行を除外して続ける場合は --skip-invalid を付けてください。';
+      console.error(`入力データを読めませんでした。${err.message}${hint}`);
       process.exit(1);
     }
     throw err;

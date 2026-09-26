@@ -65,6 +65,8 @@ To run a clone of this repository instead, set `command` to `node` and `args` to
 
 Entries accept either a simple form (`debit_account` / `credit_account` / `amount`) or a line form (`lines: [{ account, debit, credit }]`) for compound entries and consumption tax.
 
+If a single entry cannot be read, the whole call stops by default and reports which entry failed and why. Pass `skipInvalid: true` to exclude unreadable entries and carry on; they come back in `invalidRows` with their position, ID and reason.
+
 ## Rules
 
 | ID | Severity | What it indicates |
@@ -84,6 +86,10 @@ Entries accept either a simple form (`debit_account` / `credit_account` / `amoun
 `threshold_avoidance` and `period_end_large` stay dormant unless `approvalThresholds` and `fiscalYearEnd` are supplied. A rule firing blindly produces false positives, so it stops explicitly instead.
 
 `weekend_or_holiday` skips entries dated on the last day of a month by default. Month-end and period-end adjustments usually carry the month-end date even when it falls on a weekend; in a year when March 31 is a Sunday, every year-end adjustment would otherwise be flagged. Pass `exemptMonthEnd: false` to include them.
+
+`weekend_or_holiday` also recognises Japanese national holidays, including substitute holidays and the in-between citizens' holiday, for 2000–2099. They are computed from the Public Holiday Act rather than a downloaded list, and the computation matches the Cabinet Office list for every day from 2000 to 2027. Company-specific holidays such as the New Year break go in `holidays`. For ledgers outside Japan, pass `japaneseHolidays: false`.
+
+`duplicate` and `rare_account_pair` sort the accounts on each side before comparing, so the order of lines within an entry does not change the result.
 
 ## On Benford analysis
 
@@ -120,7 +126,7 @@ The server makes no network calls. It reads stdin and writes stdout.
 npm test
 ```
 
-51 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
+67 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
 
 ## License
 

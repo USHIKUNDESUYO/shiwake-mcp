@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeJournals, JournalError } from '../src/journal.js';
+import { normalizeJournals, normalizeJournalsSkippingInvalid, JournalError } from '../src/journal.js';
 
 test('簡易形は借方1行・貸方1行に展開される', () => {
   const [e] = normalizeJournals([
@@ -103,4 +103,33 @@ test('科目が欠けていれば何件目かを添えて落とす', () => {
 
 test('空配列は落とす', () => {
   assert.throws(() => normalizeJournals([]), JournalError);
+});
+
+test('除外モードでは読めない行だけを外し、何件目か・伝票番号・理由を返す', () => {
+  const { entries, skipped } = normalizeJournalsSkippingInvalid([
+    { id: 'OK1', date: '2026-01-14', debit_account: 'A', credit_account: 'B', amount: 100 },
+    { id: 'NEG', date: '2026-01-14', debit_account: 'A', credit_account: 'B', amount: -5 },
+    { id: 'SLASH', date: '2026/01/14', debit_account: 'A', credit_account: 'B', amount: 100 },
+    { id: 'OK2', date: '2026-01-15', debit_account: 'A', credit_account: 'B', amount: 200 },
+  ]);
+  assert.deepEqual(
+    entries.map((e) => [e.id, e.index]),
+    [
+      ['OK1', 0],
+      ['OK2', 3],
+    ]
+  );
+  assert.deepEqual(
+    skipped.map((s) => [s.id, s.index]),
+    [
+      ['NEG', 1],
+      ['SLASH', 2],
+    ]
+  );
+  assert.match(skipped[0].reason, /2件目.*負/);
+});
+
+test('除外モードでも、1件も読めなければ落とす', () => {
+  assert.throws(() => normalizeJournalsSkippingInvalid([{ date: '2026/01/14' }]), JournalError);
+  assert.throws(() => normalizeJournalsSkippingInvalid([]), JournalError);
 });

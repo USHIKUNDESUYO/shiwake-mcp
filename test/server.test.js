@@ -157,7 +157,34 @@ test('壊れた入力は isError で返し、プロセスは落ちない', async
   );
   assert.equal(responses[1].result.isError, true);
   assert.match(responses[1].result.content[0].text, /読めませんでした/);
+  assert.match(responses[1].result.content[0].text, /skipInvalid: true/);
   assert.equal(responses[2].id, 3, '後続のリクエストが処理されていません');
+});
+
+const withBadRow = [...sample, { id: 'NEG', date: '2026-01-14', debit_account: '売上高', credit_account: '売掛金', amount: -5000 }];
+
+test('skipInvalid を渡すと、読めない行を除外して続け、除外した行を返す', async () => {
+  const [, res] = await callServer(
+    [init, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'screen_journals', arguments: { journals: withBadRow, skipInvalid: true } } }],
+    { expect: 2 }
+  );
+  assert.ok(!res.result.isError);
+  assert.match(res.result.content[0].text, /読めない 1 件を除外しました/);
+  const payload = JSON.parse(res.result.content[1].text);
+  assert.equal(payload.summary.entryCount, 2);
+  assert.equal(payload.invalidRowCount, 1);
+  assert.deepEqual(payload.invalidRows.map((r) => [r.id, r.index]), [['NEG', 2]]);
+});
+
+test('benford_analysis の skipped（判定できない金額の件数）は、除外した行の一覧と混ざらない', async () => {
+  const [, res] = await callServer(
+    [init, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'benford_analysis', arguments: { journals: withBadRow, skipInvalid: true } } }],
+    { expect: 2 }
+  );
+  assert.ok(!res.result.isError);
+  const payload = JSON.parse(res.result.content[1].text);
+  assert.equal(typeof payload.skipped, 'number');
+  assert.equal(payload.invalidRowCount, 1);
 });
 
 test('未知のツール名は JSON-RPC エラーを返す', async () => {

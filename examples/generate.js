@@ -8,6 +8,8 @@
  *   node examples/generate.js > examples/journals.sample.json
  */
 
+import { japaneseHolidayName } from '../src/holidays.js';
+
 /** mulberry32。結果を再現させるためだけの簡易PRNG。 */
 function rng(seed) {
   let a = seed >>> 0;
@@ -56,14 +58,15 @@ function dateOf(dayOffset) {
 }
 
 /**
- * 通常の取引は平日に寄せる。土日に均等に散らすと休日ルールが母集団の
- * 4分の1を拾ってしまい、実際の総勘定元帳と形が変わってしまう。
+ * 通常の取引は営業日に寄せる。土日に均等に散らすと休日ルールが母集団の
+ * 4分の1を拾ってしまい、実際の総勘定元帳と形が変わってしまう。祝日も同じ理由で避ける。
+ * 乱数を使わずに日付を後ろへずらすだけなので、金額や科目の並びは変わらない。
  */
 function businessDateOf(dayOffset) {
   for (let i = 0; i < 7; i += 1) {
     const date = dateOf(dayOffset + i);
     const dow = new Date(`${date}T00:00:00Z`).getUTCDay();
-    if (dow !== 0 && dow !== 6) return date;
+    if (dow !== 0 && dow !== 6 && !japaneseHolidayName(date)) return date;
   }
   return dateOf(dayOffset);
 }

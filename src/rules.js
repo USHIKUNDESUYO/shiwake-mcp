@@ -7,12 +7,14 @@
  */
 
 import { benfordAnalysis } from './benford.js';
+import { japaneseHolidayName } from './holidays.js';
 
 const SEVERITY_SCORE = { high: 10, medium: 5, low: 2 };
 
 const DEFAULT_OPTIONS = {
   businessHours: [9, 18],
   holidays: [],
+  japaneseHolidays: true,
   exemptMonthEnd: true,
   approvalThresholds: [],
   thresholdMarginRatio: 0.05,
@@ -65,6 +67,16 @@ function fiscalYearEndFor(dateObj, mmdd) {
 /** その日が月末日か。翌日が別の月になるかで見る（うるう年は2月29日が月末になる）。 */
 function isMonthEnd(dateObj) {
   return new Date(dateObj.getTime() + 86400000).getUTCMonth() !== dateObj.getUTCMonth();
+}
+
+/** 借方・貸方それぞれの科目を並べ替えて返す。明細の行の順番だけで結果が変わらないようにするため。 */
+function accountSides(e) {
+  return [[...e.debitAccounts].sort().join('/'), [...e.creditAccounts].sort().join('/')];
+}
+
+/** 重複仕訳の判定キー。計上日・金額・借方科目・貸方科目が同じものを同じとみなす。 */
+function duplicateKey(e) {
+  return [e.date, e.amount, ...accountSides(e)].join('|');
 }
 
 const RULES = [
@@ -149,7 +161,7 @@ const RULES = [
     run(entries) {
       const groups = new Map();
       for (const e of entries) {
-        const key = [e.date, e.amount, e.debitAccounts.join('/'), e.creditAccounts.join('/')].join('|');
+        const key = duplicateKey(e);
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(e);
       }
@@ -238,7 +250,7 @@ const RULES = [
       '母集団のなかでほとんど現れない借方・貸方の組み合わせ。通常の取引フローから外れた処理を示す。',
     run(entries, o) {
       if (entries.length < o.rarePairMinSampleSize) return [];
-      const keyOf = (e) => `${e.debitAccounts.join('/')} / ${e.creditAccounts.join('/')}`;
+      const keyOf = (e) => accountSides(e).join(' / ');
       const counts = new Map();
       for (const e of entries) counts.set(keyOf(e), (counts.get(keyOf(e)) ?? 0) + 1);
       return entries
@@ -260,19 +272,24 @@ const RULES = [
     title: '休日の計上',
     severity: 'low',
     rationale:
-      '土日および指定された休日に計上された仕訳。通常の業務サイクルの外で処理されている。月末日付の仕訳は既定で対象から外す（月次・期末の整理仕訳は、土日でも月末の日付で計上されることが多いため）。',
+      '土日・日本の祝日（振替休日と国民の休日を含む）・指定された休日に計上された仕訳。通常の業務サイクルの外で処理されている。月末日付の仕訳は既定で対象から外す（月次・期末の整理仕訳は、土日でも月末の日付で計上されることが多いため）。',
     run(entries, o) {
       const holidays = new Set(o.holidays);
       const out = [];
       for (const e of entries) {
         const dow = e.dateObj.getUTCDay();
         const isWeekend = dow === 0 || dow === 6;
-        const isHoliday = holidays.has(e.date);
+        const holidayName = o.japaneseHolidays ? japaneseHolidayName(e.date) : null;
+        const isHoliday = holidays.has(e.date) || holidayName !== null;
         if (!isWeekend && !isHoliday) continue;
         // 3月31日が日曜の年でも、決算整理仕訳は3月31日付で入る。これを休日の計上として数えると、期末の整理が全部当たる。
         if (o.exemptMonthEnd && isMonthEnd(e.dateObj)) continue;
-        const label = isHoliday ? `休日（${e.date}）の計上です` : `${dow === 0 ? '日曜' : '土曜'}の計上です`;
-        out.push(finding('weekend_or_holiday', 'low', e, label, { dayOfWeek: dow, isWeekend, isHoliday }));
+        let label = `${dow === 0 ? '日曜' : '土曜'}の計上です`;
+        if (holidayName) label = `祝日（${holidayName}・${e.date}）の計上です`;
+        else if (isHoliday) label = `休日（${e.date}）の計上です`;
+        out.push(
+          finding('weekend_or_holiday', 'low', e, label, { dayOfWeek: dow, isWeekend, isHoliday, holidayName })
+        );
       }
       return out;
     },
@@ -346,6 +363,8 @@ function screen(entries, options = {}) {
 
   const findings = selected.flatMap((r) => r.run(entries, o));
 
+  // 読めない仕訳を除外したときは、配列の位置と入力の「何件目」がずれる。index で引き直す。
+  const byIndex = new Map(entries.map((e) => [e.index, e]));
   const byEntry = new Map();
   for (const f of findings) {
     if (f.entryIndex === null) continue;
@@ -357,7 +376,7 @@ function screen(entries, options = {}) {
 
   const ranked = [...byEntry.entries()]
     .map(([index, v]) => {
-      const e = entries[index];
+      const e = byIndex.get(index);
       return {
         entryId: e.id,
         entryIndex: index,
@@ -400,4 +419,6 @@ export {
   DEFAULT_OPTIONS,
   SEVERITY_SCORE,
   fiscalYearEndFor,
+  accountSides,
+  duplicateKey,
 };
