@@ -2,7 +2,7 @@
 
 A dependency-free MCP server for journal entry testing (JET).
 
-It takes journal entries from a general ledger, applies 14 screening rules, and returns them ordered by the sequence a human should review them in. *Shiwake* (仕訳) is the Japanese word for a journal entry.
+It takes journal entries from a general ledger, applies 15 screening rules, and returns them ordered by the sequence a human should review them in. *Shiwake* (仕訳) is the Japanese word for a journal entry.
 
 [日本語](README.md)
 
@@ -79,6 +79,8 @@ Tools then take `file` instead of `journals`. Relative paths resolve against the
 | `detect_duplicates` | Groups of identical entries |
 | `list_rules` | The implemented rules and what each one indicates |
 
+Every tool is annotated as read-only (`readOnlyHint`) and closed-world (`openWorldHint: false`) through MCP tool annotations: nothing is modified and nothing is sent anywhere.
+
 Entries accept either a simple form (`debit_account` / `credit_account` / `amount`) or a line form (`lines: [{ account, debit, credit }]`) for compound entries and consumption tax.
 
 If a single entry cannot be read, the whole call stops by default and reports which entry failed and why. Pass `skipInvalid: true` to exclude unreadable entries and carry on; they come back in `invalidRows` with their position, ID and reason.
@@ -93,6 +95,8 @@ CSV exported from accounting software can be passed as is. Column names are matc
 
 Rows sharing a voucher number and date become one entry. The 諸口 (sundry) counter-account used for compound entries is dropped when its debits and credits match within the voucher, and kept when they do not, so an imbalance is not hidden. Dates such as 2026/3/31, 20260331, R8.3.31 and 令和8年3月31日 are read; △ and parentheses mark negative amounts. A title row above the header is skipped. Errors and exclusions report the CSV row number.
 
+Yayoi Kaikei's import/export format (弥生インポート形式: no header row, 25 or 27 fields) is recognised by the record-type flag in the first field and read by position. Flags 2000 and 2111 are one-line entries; rows from 2110 through 2101 form one entry. The field order follows Yayoi's published specification (仕訳データの項目と記述形式). The format carries no entry timestamp, so the three rules that need one (`backdated`, `post_period_entry`, `after_hours`) do not run on it.
+
 ## Rules
 
 | ID | Severity | What it indicates |
@@ -103,6 +107,7 @@ Rows sharing a voucher number and date become one entry. The 諸口 (sundry) cou
 | `duplicate` | medium | Double posting, or a legitimate recurring entry |
 | `reversal` | medium | A reversal or correction; pairs across the year end lead to a cut-off check |
 | `backdated` | medium | Cut-off error or retrospective posting |
+| `post_period_entry` | medium | Closing adjustments and post-close corrections, where management override tends to appear |
 | `period_end_large` | medium | Where earnings management would appear first |
 | `rare_account_pair` | medium | Processing outside the normal transaction flow |
 | `weekend_or_holiday` | low | Posted outside the business cycle |
@@ -119,6 +124,8 @@ Rows sharing a voucher number and date become one entry. The 諸口 (sundry) cou
 `weekend_or_holiday` also recognises Japanese national holidays, including substitute holidays and the in-between citizens' holiday, for 2000–2099. They are computed from the Public Holiday Act rather than a downloaded list, and the computation matches the Cabinet Office list for every day from 2000 to 2027. Company-specific holidays such as the New Year break go in `holidays`. For ledgers outside Japan, pass `japaneseHolidays: false`.
 
 `duplicate` and `rare_account_pair` sort the accounts on each side before comparing, so the order of lines within an entry does not change the result.
+
+`post_period_entry` flags entries entered after the year end but dated on or before it. `backdated` only catches delays beyond 30 days by default, so a March 31 entry keyed in on April 10 is caught here instead. It needs both `fiscalYearEnd` and `entered_at`.
 
 `reversal` pairs an entry with one that swaps its debit and credit accounts for the same amount within 30 days (`reversalWindowDays`), and reports both with each other's voucher number. Each entry joins at most one pair. A pair crossing the year end is noted in the message, but its severity is not raised, because opening reversals of accruals take the same shape.
 
@@ -161,7 +168,7 @@ The server makes no network calls. It reads stdin, plus `.json` and `.csv` files
 npm test
 ```
 
-102 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
+107 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
 
 ## License
 

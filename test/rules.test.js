@@ -120,6 +120,33 @@ test('backdated: 既定の30日を超えた入力だけを拾う', () => {
   assert.deepEqual(found, ['SLOW']);
 });
 
+test('post_period_entry: 期末日より後に入力された、期末日以前の日付の仕訳を拾う', () => {
+  const journals = [
+    { ...base, id: 'LATE', date: '2026-03-31', entered_at: '2026-04-10T10:00:00+09:00' },
+    { ...base, id: 'SAMEDAY', date: '2026-03-31', entered_at: '2026-03-31T18:00:00+09:00' },
+    { ...base, id: 'NEXTPERIOD', date: '2026-04-05', entered_at: '2026-04-06T10:00:00+09:00' },
+    // 18日の遅れ＝計上日と入力日の乖離（30日）には当たらないが、期末はまたいでいる
+    { ...base, id: 'SHORTLAG', date: '2026-03-15', entered_at: '2026-04-02' },
+  ];
+  const result = screen(normalizeJournals(journals), { rules: ['post_period_entry', 'backdated'], fiscalYearEnd: '03-31' });
+  assert.deepEqual(
+    result.findings.map((f) => [f.rule, f.entryId]),
+    [
+      ['post_period_entry', 'LATE'],
+      ['post_period_entry', 'SHORTLAG'],
+    ]
+  );
+  assert.deepEqual(
+    [result.findings[0].detail.periodEnd, result.findings[0].detail.daysAfterPeriodEnd],
+    ['2026-03-31', 10]
+  );
+});
+
+test('post_period_entry: 決算日か入力日時が無ければ何も出ない', () => {
+  assert.deepEqual(hits([{ ...base, date: '2026-03-31', entered_at: '2026-04-10T10:00:00+09:00' }], 'post_period_entry'), []);
+  assert.deepEqual(hits([{ ...base, date: '2026-03-31', entered_at: undefined }], 'post_period_entry', { fiscalYearEnd: '03-31' }), []);
+});
+
 test('period_end_large: 期末の窓に入った大口だけを拾う', () => {
   const journals = [];
   for (let i = 0; i < 40; i += 1) {

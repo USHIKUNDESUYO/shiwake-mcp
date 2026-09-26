@@ -5,6 +5,8 @@
  * 1行が「借方の科目・金額」と「貸方の科目・金額」を持つ形を前提に、伝票番号と日付が同じ行を1つの仕訳にまとめる。
  * 複合仕訳の相手科目に使われる「諸口」は、借方と貸方で同額なら取り除く。
  *
+ * 弥生会計の「弥生インポート形式」は見出しの行が無いので、列名ではなく列の位置で読む（yayoiToJournals）。
+ *
  * 値の検査（日付の実在、金額が数値か、など）はここではしない。読めない値はそのまま渡し、
  * 仕訳の正規化（journal.js）で「何件目のどこが読めないか」を返す。
  */
@@ -194,12 +196,70 @@ function dropBalancedShokuchi(lines) {
 }
 
 /**
+ * 弥生インポート形式の列の位置（0始まり）。弥生会計サポート情報「仕訳データの項目と記述形式」の表の順で、
+ * 1 識別フラグ・2 伝票No.・3 決算・4 取引日付・5〜10 借方（科目・補助・部門・税区分・金額・税金額）・
+ * 11〜16 貸方（同）・17 摘要 … 25 調整（27項目の版は後ろに2項目増える）。金額は税込。
+ */
+const YAYOI = { flag: 0, id: 1, date: 3, debit_account: 4, debit_amount: 8, credit_account: 10, credit_amount: 14, description: 16 };
+const YAYOI_FLAGS = new Set(['2000', '2111', '2110', '2100', '2101']);
+
+/** 見出しの行が無く、1行目の1項目めが識別フラグで、25項目以上ある CSV を弥生インポート形式とみなす。 */
+function isYayoiFormat(rows) {
+  return rows[0].length >= 25 && YAYOI_FLAGS.has(rows[0][YAYOI.flag].trim());
+}
+
+/**
+ * 弥生インポート形式を仕訳にする。識別フラグで伝票の区切りを見る：
+ * 2000（伝票以外）と 2111（1行伝票）は1行で1仕訳、2110 で始まり 2100 が続き 2101 で終わる行が1仕訳。
+ * 複数行の伝票は、1行に借方か貸方の片側だけを書いてよい。
+ */
+function yayoiToJournals(rows) {
+  const journals = [];
+  const rowOf = [];
+  let current = null;
+  rows.forEach((row, r) => {
+    const cell = (i) => String(row[i] ?? '').trim();
+    const flag = cell(YAYOI.flag);
+    if (current === null || (flag !== '2100' && flag !== '2101')) {
+      const id = cell(YAYOI.id);
+      current = { ...(id === '' ? {} : { id }), date: normalizeDate(cell(YAYOI.date)), description: '', lines: [] };
+      journals.push(current);
+      rowOf.push(r + 1);
+    }
+    if (current.description === '' && cell(YAYOI.description) !== '') current.description = cell(YAYOI.description);
+    if (cell(YAYOI.debit_account) !== '') {
+      current.lines.push({ account: cell(YAYOI.debit_account), debit: normalizeAmount(cell(YAYOI.debit_amount)) });
+    }
+    if (cell(YAYOI.credit_account) !== '') {
+      current.lines.push({ account: cell(YAYOI.credit_account), credit: normalizeAmount(cell(YAYOI.credit_amount)) });
+    }
+    // 2110（1行目）と 2100（途中の行）のあとは、同じ伝票が続く
+    if (flag !== '2110' && flag !== '2100') current = null;
+  });
+  for (const j of journals) j.lines = dropBalancedShokuchi(j.lines);
+
+  const columnsUsed = {
+    id: '2列目（伝票No.）',
+    date: '4列目（取引日付）',
+    debit_account: '5列目（借方勘定科目）',
+    debit_amount: '9列目（借方金額）',
+    credit_account: '11列目（貸方勘定科目）',
+    credit_amount: '15列目（貸方金額）',
+    description: '17列目（摘要）',
+  };
+  return { journals, rowOf, columnsUsed, rowCount: rows.length, layout: 'yayoi' };
+}
+
+/**
  * CSV の文字列を、仕訳の配列にする。
  * 戻り値の rowOf[i] は、i 件目の仕訳が CSV の何行目（見出しを含めて数える）から始まるか。エラーの位置を CSV の行で返すために使う。
+ * columns の指定が無く、弥生インポート形式に見えるときは、列の位置で読む。
  */
 function csvToJournals(text, columns) {
   const rows = parseCsv(text);
   if (rows.length === 0) throw new CsvError('CSV が空です');
+  const hasOverrides = columns && Object.keys(columns).length > 0;
+  if (!hasOverrides && isYayoiFormat(rows)) return yayoiToJournals(rows);
   const { h, index } = findHeader(rows, columns);
   const header = rows[h];
   const cell = (row, field) => (index[field] === undefined ? '' : String(row[index[field]] ?? '').trim());
@@ -250,7 +310,7 @@ function csvToJournals(text, columns) {
 
   const columnsUsed = {};
   for (const [field, i] of Object.entries(index)) columnsUsed[field] = header[i];
-  return { journals, rowOf, columnsUsed, rowCount: rows.length - h - 1 };
+  return { journals, rowOf, columnsUsed, rowCount: rows.length - h - 1, layout: 'header' };
 }
 
 export { csvToJournals, parseCsv, normalizeDate, normalizeDateTime, normalizeAmount, normalizeHeader, CsvError, FIELDS };

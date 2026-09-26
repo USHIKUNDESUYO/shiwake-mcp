@@ -17,7 +17,7 @@ import { screen, RULES, accountSides, duplicateKey } from './rules.js';
 import { benfordAnalysis } from './benford.js';
 import { dataDirsFrom, resolveAllowedFile, readJournalFile, FileAccessError } from './files.js';
 
-const SERVER_INFO = { name: 'shiwake-mcp', version: '0.2.0' };
+const SERVER_INFO = { name: 'shiwake-mcp', version: '0.3.0' };
 const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const LATEST_PROTOCOL = SUPPORTED_PROTOCOLS[0];
 
@@ -142,9 +142,16 @@ const optionsSchema = {
   },
 };
 
+/**
+ * どのツールも読むだけで、何も書き換えず、外部のサービスにも触れない。MCP のツール注釈でそれを宣言する。
+ * 対応するクライアントは、書き換えを伴わない道具として扱える。
+ */
+const readOnly = (title) => ({ title, readOnlyHint: true, openWorldHint: false });
+
 const TOOLS = [
   {
     name: 'screen_journals',
+    annotations: readOnly('仕訳のスクリーニング'),
     description:
       '仕訳データに全ルールを適用し、リスクスコアの高い順に並べ替えて返す。先に人間が見るべき束を絞り込むための一次スクリーニング。検出は不正の証拠ではない。',
     inputSchema: {
@@ -163,6 +170,7 @@ const TOOLS = [
   },
   {
     name: 'check_balance',
+    annotations: readOnly('貸借の一致の確認'),
     description: '貸借が一致しない仕訳だけを返す。取込不良と手入力の混入を最初に落とすために使う。',
     inputSchema: {
       type: 'object',
@@ -174,6 +182,7 @@ const TOOLS = [
   },
   {
     name: 'benford_analysis',
+    annotations: readOnly('ベンフォード分析'),
     description:
       '金額の先頭桁の分布をベンフォードの法則と比較し、MAD と χ² を返す。母集団の性質を見るための道具で、個別仕訳の判定には使えない。',
     inputSchema: {
@@ -187,6 +196,7 @@ const TOOLS = [
   },
   {
     name: 'detect_duplicates',
+    annotations: readOnly('重複仕訳の検出'),
     description: '計上日・金額・借方科目・貸方科目が完全に一致する仕訳をグループにして返す。明細の行の順番は問わない。',
     inputSchema: {
       type: 'object',
@@ -198,6 +208,7 @@ const TOOLS = [
   },
   {
     name: 'list_rules',
+    annotations: readOnly('ルールの一覧'),
     description: '実装されているスクリーニングルールの一覧と、それぞれが何を示すかの説明を返す。',
     inputSchema: { type: 'object', properties: {} },
   },
@@ -245,6 +256,7 @@ function readJournals(args) {
       rowCount: loaded.rowCount,
       journalCount: journals.length,
       columnsUsed: loaded.columnsUsed,
+      layout: loaded.layout ?? null,
     };
   }
 
@@ -269,7 +281,9 @@ function finish(summaryLines, payload, { skipped = [], source = null, notes = []
   const out = { ...payload };
   if (source) {
     const what =
-      source.format === 'csv' ? `CSV ${source.rowCount} 行 → 仕訳 ${source.journalCount} 件` : `仕訳 ${source.journalCount} 件`;
+      source.format === 'csv'
+        ? `CSV${source.layout === 'yayoi' ? '（弥生インポート形式）' : ''} ${source.rowCount} 行 → 仕訳 ${source.journalCount} 件`
+        : `仕訳 ${source.journalCount} 件`;
     extra.push(`ファイル ${basename(source.file)} を読みました（${what}）。`);
     out.source = source;
   }

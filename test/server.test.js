@@ -103,6 +103,15 @@ test('tools/list が5つのツールをスキーマつきで返す', async () =>
   }
 });
 
+test('tools/list はどのツールにも「読み取り専用・外部に触れない」の注釈を付ける', async () => {
+  const [, res] = await callServer([init, { jsonrpc: '2.0', id: 2, method: 'tools/list' }], { expect: 2 });
+  for (const tool of res.result.tools) {
+    assert.equal(tool.annotations?.readOnlyHint, true, `${tool.name} に readOnlyHint がありません`);
+    assert.equal(tool.annotations?.openWorldHint, false, `${tool.name} に openWorldHint がありません`);
+    assert.ok(tool.annotations?.title, `${tool.name} に title がありません`);
+  }
+});
+
 test('notifications/initialized には応答しない', async () => {
   const responses = await callServer(
     [

@@ -143,6 +143,53 @@ test('columns に無い項目名や、見出しに無い列名は止める', () 
   assert.throws(() => csvToJournals(csv, { date: '存在しない列' }), CsvError);
 });
 
+/** 弥生インポート形式の1行（25項目）を作る。片側だけの行は、もう片側を空にする。 */
+function yayoiRow({ flag, id = '', date, dr = '', drAmount = '', cr = '', crAmount = '', memo = '' }) {
+  const row = new Array(25).fill('');
+  row[0] = flag;
+  row[1] = id;
+  row[3] = date;
+  row[4] = dr;
+  row[8] = drAmount;
+  row[10] = cr;
+  row[14] = crAmount;
+  row[16] = memo;
+  row[19] = '0';
+  row[24] = 'no';
+  return row.join(',');
+}
+
+test('弥生インポート形式（見出しなし）を、識別フラグで伝票ごとにまとめて読む', () => {
+  const csv = [
+    yayoiRow({ flag: '2000', id: '1', date: '2026/3/1', dr: '現金', drAmount: '1000', cr: '売上高', crAmount: '1000', memo: '店頭売上' }),
+    yayoiRow({ flag: '2110', id: '2', date: 'R08/03/31', dr: '外注費', drAmount: '1000000', memo: '業務委託' }),
+    yayoiRow({ flag: '2100', id: '2', date: 'R08/03/31', dr: '仮払消費税', drAmount: '100000' }),
+    yayoiRow({ flag: '2101', id: '2', date: 'R08/03/31', cr: '買掛金', crAmount: '1100000' }),
+    yayoiRow({ flag: '2111', id: '3', date: '20260331', dr: '支払手数料', drAmount: '660', cr: '普通預金', crAmount: '660' }),
+  ].join('\r\n');
+  const { journals, rowOf, layout, columnsUsed } = csvToJournals(csv);
+  assert.equal(layout, 'yayoi');
+  assert.match(columnsUsed.date, /取引日付/);
+  assert.deepEqual(rowOf, [1, 2, 5]);
+
+  const entries = normalizeJournals(journals);
+  assert.deepEqual(
+    entries.map((e) => [e.id, e.date, e.debitTotal, e.creditTotal]),
+    [
+      ['1', '2026-03-01', 1000, 1000],
+      ['2', '2026-03-31', 1100000, 1100000],
+      ['3', '2026-03-31', 660, 660],
+    ]
+  );
+  assert.deepEqual(entries[1].debitAccounts, ['外注費', '仮払消費税']);
+  assert.equal(entries[1].description, '業務委託');
+});
+
+test('見出しのある CSV は、1項目めが数字でも弥生インポート形式とはみなさない', () => {
+  const csv = ['伝票番号,日付,借方科目,貸方科目,金額', '2000,2026/01/14,現金,売上高,1000'].join('\n');
+  assert.equal(csvToJournals(csv).layout, 'header');
+});
+
 test('空の CSV は止める', () => {
   assert.throws(() => csvToJournals('\n\n'), CsvError);
 });

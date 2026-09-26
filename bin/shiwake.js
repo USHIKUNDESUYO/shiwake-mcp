@@ -90,7 +90,10 @@ function render(result, top, skipped, loaded) {
   const lines = [];
 
   lines.push('');
-  if (loaded.format === 'csv') lines.push(`読み込み   CSV ${loaded.rowCount} 行 → 仕訳 ${loaded.journals.length} 件`);
+  if (loaded.format === 'csv') {
+    const layout = loaded.layout === 'yayoi' ? '（弥生インポート形式）' : '';
+    lines.push(`読み込み   CSV${layout} ${loaded.rowCount} 行 → 仕訳 ${loaded.journals.length} 件`);
+  }
   lines.push(`検査対象   ${s.entryCount} 件`);
   if (skipped.length > 0) lines.push(`除外       ${skipped.length} 件（読めない行。例: ${skipped[0].reason}）`);
   lines.push(`検出       ${s.findingCount} 件 / 対象仕訳 ${s.flaggedEntryCount} 件`);

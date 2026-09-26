@@ -284,6 +284,35 @@ const RULES = [
   },
 
   {
+    id: 'post_period_entry',
+    title: '期末後の入力',
+    severity: 'medium',
+    rationale:
+      '期末日より後に入力された、期末日以前の日付の仕訳。決算整理と締めたあとの修正がここに集まり、経営者による内部統制の無効化が現れやすい。計上日と入力日の乖離（既定30日）より短い遅れも拾う。',
+    run(entries, o) {
+      if (!o.fiscalYearEnd) return [];
+      const out = [];
+      for (const e of entries) {
+        if (!e.enteredAt) continue;
+        const fye = fiscalYearEndFor(e.dateObj, o.fiscalYearEnd);
+        const after = daysBetween(fye, new Date(`${e.enteredAt.date}T00:00:00Z`));
+        if (after <= 0) continue;
+        const periodEnd = fye.toISOString().slice(0, 10);
+        out.push(
+          finding(
+            'post_period_entry',
+            'medium',
+            e,
+            `期末 ${periodEnd} の ${after} 日後（${e.enteredAt.date}）に入力された、${e.date} 付の仕訳です`,
+            { periodEnd, enteredDate: e.enteredAt.date, daysAfterPeriodEnd: after }
+          )
+        );
+      }
+      return out;
+    },
+  },
+
+  {
     id: 'period_end_large',
     title: '期末直前の大口計上',
     severity: 'medium',
