@@ -5,17 +5,33 @@
  * stdio 上の JSON-RPC 2.0 を、依存ライブラリなしで実装している。
  * 会計データを扱う道具に外部依存を足さないための判断で、
  * node_modules を1つも持たないことが、そのまま監査上の説明になる。
+ *
+ * ネットワークには出ない。読むのは stdin と、起動時に --data-dir で許可したフォルダの中のファイルだけ。
  */
 
+import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { normalizeJournals, normalizeJournalsSkippingInvalid, JournalError } from './journal.js';
 import { screen, RULES, accountSides, duplicateKey } from './rules.js';
 import { benfordAnalysis } from './benford.js';
+import { dataDirsFrom, resolveAllowedFile, readJournalFile, FileAccessError } from './files.js';
 
-const SERVER_INFO = { name: 'shiwake-mcp', version: '0.1.2' };
+const SERVER_INFO = { name: 'shiwake-mcp', version: '0.2.0' };
 const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const LATEST_PROTOCOL = SUPPORTED_PROTOCOLS[0];
+
+/** file で読んでよいフォルダ。起動引数の --data-dir と環境変数 SHIWAKE_DATA_DIR で決まる。 */
+const DATA_DIRS = dataDirsFrom(process.argv.slice(2), process.env);
+
+/** 仕訳に紐づかない検出（伝票番号の欠番）は、allFindings を指定しない限りこの件数までを返す。 */
+const ENTRYLESS_FINDINGS_LIMIT = 100;
+
+/** check_balance・detect_duplicates の一覧の既定の件数。 */
+const DEFAULT_LIST_LIMIT = 200;
+
+/** detect_duplicates で、1つのグループに添える伝票番号の上限。 */
+const ENTRY_IDS_LIMIT = 50;
 
 /* ---------------------------------------------------------------- 入力スキーマ */
 
@@ -23,13 +39,16 @@ const journalsSchema = {
   type: 'array',
   minItems: 1,
   description:
-    '仕訳の配列。簡易形 { date, debit_account, credit_account, amount } か、明細形 { date, lines: [{ account, debit, credit }] } のどちらでも受ける。',
+    '仕訳の配列。簡易形 { date, debit_account, credit_account, amount } か、明細形 { date, lines: [{ account, debit, credit }] } のどちらでも受ける。数百件を超える元帳は、ここに並べずに file で渡す。',
   items: {
     type: 'object',
     properties: {
       id: { type: 'string', description: '伝票番号。省略時は連番を振る。' },
       date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: '計上日 (YYYY-MM-DD)' },
-      entered_at: { type: 'string', description: '入力日時 (ISO 8601)。営業時間外・遡及入力の判定に使う。' },
+      entered_at: {
+        type: 'string',
+        description: '入力日時 (ISO 8601)。営業時間外・遡及入力の判定に使う。日付だけでもよい（そのときは営業時間外の判定に使わない）。',
+      },
       debit_account: { type: 'string', description: '借方科目（簡易形）' },
       credit_account: { type: 'string', description: '貸方科目（簡易形）' },
       amount: { type: 'number', description: '金額（簡易形）' },
@@ -59,6 +78,21 @@ const skipInvalidSchema = {
   description:
     '読めない仕訳（日付の形式違い・負の金額など）を除外して続ける。既定は false で、1件でも読めなければ全体を止める。除外した行は invalidRows に返す。',
 };
+
+const fileSchema = {
+  type: 'string',
+  description:
+    '仕訳のファイル（.json か .csv）のパス。journals の代わりに使う。読めるのは、サーバーの起動時に --data-dir（または環境変数 SHIWAKE_DATA_DIR）で許可したフォルダの中だけ。相対パスは最初に許可したフォルダを起点にする。CSV は UTF-8 と Shift_JIS を読み、列名は日本語の表記ゆれごと自動で当てる。',
+};
+
+const columnsSchema = {
+  type: 'object',
+  description:
+    'CSV の列名が自動で当たらないときに、項目ごとに列名を指定する（例: { "date": "伝票日付", "amount": "金額(税込)" }）。項目は id・date・entered_at・debit_account・credit_account・debit_amount・credit_amount・amount・description・created_by・approved_by。',
+  additionalProperties: { type: 'string' },
+};
+
+const journalInputProperties = { journals: journalsSchema, file: fileSchema, columns: columnsSchema, skipInvalid: skipInvalidSchema };
 
 const optionsSchema = {
   type: 'object',
@@ -91,6 +125,15 @@ const optionsSchema = {
     largeAmountPercentile: { type: 'number', description: '大口とみなす分位点。既定は 0.95。' },
     roundAmountUnit: { type: 'number', description: 'キリのよい金額の単位。既定は 100000。' },
     backdatedDaysThreshold: { type: 'number', description: '計上日と入力日の乖離を問題にする日数。既定は 30。' },
+    reversalWindowDays: {
+      type: 'number',
+      description: '取消・訂正仕訳とみなす、元の仕訳からの日数の上限。既定は 30。',
+    },
+    descriptionKeywords: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '摘要のキーワード。既定は ["修正", "訂正", "取消", "調整", "仮計上", "不明"]。渡すと既定を置き換える。空の配列でこのルールを止める。',
+    },
     rules: {
       type: 'array',
       items: { type: 'string', enum: RULES.map((r) => r.id) },
@@ -107,12 +150,15 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        journals: journalsSchema,
+        ...journalInputProperties,
         options: optionsSchema,
         top: { type: 'number', description: '上位何件を返すか。既定は 50。' },
-        skipInvalid: skipInvalidSchema,
+        allFindings: {
+          type: 'boolean',
+          description:
+            '個々の検出を全件返す。既定は false で、上位 top 件の仕訳に関わる検出と、仕訳に紐づかない検出（伝票番号の欠番）100件までを返す。件数の集計は常に全件。',
+        },
       },
-      required: ['journals'],
     },
   },
   {
@@ -120,8 +166,10 @@ const TOOLS = [
     description: '貸借が一致しない仕訳だけを返す。取込不良と手入力の混入を最初に落とすために使う。',
     inputSchema: {
       type: 'object',
-      properties: { journals: journalsSchema, skipInvalid: skipInvalidSchema },
-      required: ['journals'],
+      properties: {
+        ...journalInputProperties,
+        top: { type: 'number', description: '差額の大きい順に何件を返すか。既定は 200。件数は常に全件を数える。' },
+      },
     },
   },
   {
@@ -131,10 +179,9 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        journals: journalsSchema,
+        ...journalInputProperties,
         amounts: { type: 'array', items: { type: 'number' }, description: 'journals の代わりに金額だけを渡す場合。' },
         digits: { type: 'number', enum: [1, 2], description: '1 = 先頭1桁、2 = 先頭2桁。既定は 1。' },
-        skipInvalid: skipInvalidSchema,
       },
     },
   },
@@ -143,8 +190,10 @@ const TOOLS = [
     description: '計上日・金額・借方科目・貸方科目が完全に一致する仕訳をグループにして返す。明細の行の順番は問わない。',
     inputSchema: {
       type: 'object',
-      properties: { journals: journalsSchema, skipInvalid: skipInvalidSchema },
-      required: ['journals'],
+      properties: {
+        ...journalInputProperties,
+        top: { type: 'number', description: '件数の多いグループから何グループを返すか。既定は 200。グループ数は常に全件を数える。' },
+      },
     },
   },
   {
@@ -172,54 +221,108 @@ function errorResult(message) {
 /** 除外した行の一覧は、この件数までを返す。読めない行が大量にあっても応答が膨らまないようにする。 */
 const SKIPPED_LIST_LIMIT = 50;
 
-/** journals を読む。skipInvalid のときは読めない行を除外し、除外した分を skipped に分けて返す。 */
+/**
+ * 仕訳を読む。journals か file のどちらか一方から読む。
+ * skipInvalid のときは読めない行を除外し、除外した分を skipped に分けて返す。
+ * CSV から読んだときは、エラーと除外の位置に CSV の行番号を添える。
+ */
 function readJournals(args) {
-  if (args.skipInvalid) return normalizeJournalsSkippingInvalid(args.journals);
-  return { entries: normalizeJournals(args.journals), skipped: [] };
+  const hasJournals = args.journals !== undefined;
+  const hasFile = args.file !== undefined;
+  if (hasJournals && hasFile) throw new JournalError('journals と file は、どちらか一方だけを渡してください');
+  if (!hasJournals && !hasFile) throw new JournalError('journals か file のどちらかが必要です');
+
+  let journals = args.journals;
+  let source = null;
+  let rowOf = null;
+  if (hasFile) {
+    const loaded = readJournalFile(resolveAllowedFile(args.file, DATA_DIRS), { columns: args.columns });
+    journals = loaded.journals;
+    rowOf = loaded.rowOf;
+    source = {
+      file: args.file,
+      format: loaded.format,
+      rowCount: loaded.rowCount,
+      journalCount: journals.length,
+      columnsUsed: loaded.columnsUsed,
+    };
+  }
+
+  try {
+    const read = args.skipInvalid
+      ? normalizeJournalsSkippingInvalid(journals)
+      : { entries: normalizeJournals(journals), skipped: [] };
+    if (rowOf) for (const s of read.skipped) s.csvRow = rowOf[s.index];
+    return { ...read, source };
+  } catch (err) {
+    if (err instanceof JournalError && rowOf && err.index !== undefined) err.message += `（CSV の ${rowOf[err.index]} 行目）`;
+    throw err;
+  }
 }
 
 /**
- * 除外があったときだけ、要約の2行目に1行と、応答に除外の一覧を足す。
- * ベンフォード分析の結果はすでに skipped（判定できなかった金額の件数）を持つので、名前を分けて invalidRows にする。
+ * 要約の1行目のあとに注記（読み込み元・除外・一覧の打ち切り）を差し込み、応答に読み込み元と除外の一覧を足す。
+ * ベンフォード分析の結果はすでに skipped（判定できなかった金額の件数）を持つので、除外した行は invalidRows という名前にする。
  */
-function withSkipped(summaryLines, payload, skipped) {
-  if (skipped.length === 0) return textResult(summaryLines.join('\n'), payload);
-  const note = `読めない ${skipped.length} 件を除外しました（例: ${skipped[0].reason}）。除外した行は invalidRows にあります。`;
-  return textResult([summaryLines[0], note, ...summaryLines.slice(1)].join('\n'), {
-    ...payload,
-    invalidRowCount: skipped.length,
-    invalidRows: skipped.slice(0, SKIPPED_LIST_LIMIT),
-  });
+function finish(summaryLines, payload, { skipped = [], source = null, notes = [] } = {}) {
+  const extra = [];
+  const out = { ...payload };
+  if (source) {
+    const what =
+      source.format === 'csv' ? `CSV ${source.rowCount} 行 → 仕訳 ${source.journalCount} 件` : `仕訳 ${source.journalCount} 件`;
+    extra.push(`ファイル ${basename(source.file)} を読みました（${what}）。`);
+    out.source = source;
+  }
+  if (skipped.length > 0) {
+    const where = skipped[0].csvRow ? `（CSV の ${skipped[0].csvRow} 行目）` : '';
+    extra.push(`読めない ${skipped.length} 件を除外しました（例: ${skipped[0].reason}${where}）。除外した行は invalidRows にあります。`);
+    out.invalidRowCount = skipped.length;
+    out.invalidRows = skipped.slice(0, SKIPPED_LIST_LIMIT);
+  }
+  extra.push(...notes);
+  return textResult([summaryLines[0], ...extra, ...summaryLines.slice(1)].join('\n'), out);
 }
 
 const HANDLERS = {
   screen_journals(args) {
-    const { entries, skipped } = readJournals(args);
+    const { entries, skipped, source } = readJournals(args);
     const result = screen(entries, args.options ?? {});
     const top = args.top ?? 50;
     const s = result.summary;
+    const ranked = result.ranked.slice(0, top);
+
+    // 個々の検出は、上位に出した仕訳の分と、仕訳に紐づかない検出（欠番）だけを返す。元帳が大きいと全件は応答に収まらない
+    let findings = result.findings;
+    if (!args.allFindings) {
+      const shown = new Set(ranked.map((r) => r.entryIndex));
+      const entryless = result.findings.filter((f) => f.entryIndex === null).slice(0, ENTRYLESS_FINDINGS_LIMIT);
+      findings = [...result.findings.filter((f) => f.entryIndex !== null && shown.has(f.entryIndex)), ...entryless];
+    }
+    const omitted = result.findings.length - findings.length;
+
     const summary = [
       `${s.entryCount} 件を検査し、${s.flaggedEntryCount} 件に ${s.findingCount} 件の検出がありました。`,
       `重要度の内訳: high ${s.bySeverity.high} / medium ${s.bySeverity.medium} / low ${s.bySeverity.low}`,
       `ベンフォード適合度: ${result.benford.conformityJa ?? '判定不能'} (MAD ${result.benford.mad ?? '-'})`,
       '検出は不正の証拠ではありません。確認の順番を決めるための材料として扱ってください。',
     ];
+    const notes =
+      omitted > 0
+        ? [
+            `個々の検出は、上位 ${ranked.length} 件の仕訳に関わるものを返しています（全 ${result.findings.length} 件のうち ${findings.length} 件）。全件が必要なら allFindings: true を渡してください。`,
+          ]
+        : [];
 
-    return withSkipped(
+    return finish(
       summary,
-      {
-        summary: s,
-        ranked: result.ranked.slice(0, top),
-        findings: result.findings,
-        benford: result.benford,
-      },
-      skipped
+      { summary: s, ranked, findings, findingsOmitted: omitted, benford: result.benford },
+      { skipped, source, notes }
     );
   },
 
   check_balance(args) {
-    const { entries, skipped } = readJournals(args);
-    const unbalanced = entries
+    const { entries, skipped, source } = readJournals(args);
+    const all = entries
       .filter((e) => e.debitTotal !== e.creditTotal)
       .map((e) => ({
         entryId: e.id,
@@ -228,31 +331,33 @@ const HANDLERS = {
         creditTotal: e.creditTotal,
         difference: e.debitTotal - e.creditTotal,
         description: e.description,
-      }));
+      }))
+      .sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference));
+    const unbalanced = all.slice(0, args.top ?? DEFAULT_LIST_LIMIT);
 
     const summary =
-      unbalanced.length === 0
+      all.length === 0
         ? `${entries.length} 件すべてで貸借が一致しています。`
-        : `${entries.length} 件のうち ${unbalanced.length} 件で貸借が一致しません。`;
+        : `${entries.length} 件のうち ${all.length} 件で貸借が一致しません。`;
+    const notes = all.length > unbalanced.length ? [`一覧は差額の大きい順に ${unbalanced.length} 件です（全 ${all.length} 件）。`] : [];
 
-    return withSkipped(
+    return finish(
       [summary],
-      { entryCount: entries.length, unbalancedCount: unbalanced.length, unbalanced },
-      skipped
+      { entryCount: entries.length, unbalancedCount: all.length, unbalanced },
+      { skipped, source, notes }
     );
   },
 
   benford_analysis(args) {
     let amounts;
-    let skipped = [];
+    let read = { skipped: [], source: null };
     if (Array.isArray(args.amounts) && args.amounts.length > 0) {
       amounts = args.amounts;
-    } else if (args.journals) {
-      const read = readJournals(args);
+    } else if (args.journals !== undefined || args.file !== undefined) {
+      read = readJournals(args);
       amounts = read.entries.map((e) => e.amount);
-      skipped = read.skipped;
     } else {
-      throw new JournalError('journals または amounts のどちらかが必要です');
+      throw new JournalError('journals・file・amounts のいずれかが必要です');
     }
 
     const result = benfordAnalysis(amounts, args.digits ?? 1);
@@ -263,11 +368,11 @@ const HANDLERS = {
       result.note,
     ].filter(Boolean);
 
-    return withSkipped(summary, result, skipped);
+    return finish(summary, result, { skipped: read.skipped, source: read.source });
   },
 
   detect_duplicates(args) {
-    const { entries, skipped } = readJournals(args);
+    const { entries, skipped, source } = readJournals(args);
     const groups = new Map();
     for (const e of entries) {
       const key = duplicateKey(e);
@@ -275,7 +380,7 @@ const HANDLERS = {
       groups.get(key).push(e);
     }
 
-    const duplicates = [...groups.entries()]
+    const all = [...groups.entries()]
       .filter(([, g]) => g.length >= 2)
       .map(([key, g]) => {
         const [debit, credit] = accountSides(g[0]);
@@ -286,21 +391,25 @@ const HANDLERS = {
           amount: g[0].amount,
           debit,
           credit,
-          entryIds: g.map((e) => e.id),
+          // 伝票番号は先頭から ENTRY_IDS_LIMIT 件まで。件数は count にある
+          entryIds: g.slice(0, ENTRY_IDS_LIMIT).map((e) => e.id),
         };
       })
       .sort((a, b) => b.count - a.count);
+    const duplicates = all.slice(0, args.top ?? DEFAULT_LIST_LIMIT);
 
-    const affected = duplicates.reduce((a, d) => a + d.count, 0);
+    const affected = all.reduce((a, d) => a + d.count, 0);
     const summary =
-      duplicates.length === 0
+      all.length === 0
         ? '完全に一致する仕訳はありませんでした。'
-        : `${duplicates.length} グループ・計 ${affected} 件が重複しています。定期計上の正当な繰り返しが含まれます。`;
+        : `${all.length} グループ・計 ${affected} 件が重複しています。定期計上の正当な繰り返しが含まれます。`;
+    const notes =
+      all.length > duplicates.length ? [`一覧は件数の多い順に ${duplicates.length} グループです（全 ${all.length} グループ）。`] : [];
 
-    return withSkipped(
+    return finish(
       [summary],
-      { entryCount: entries.length, groupCount: duplicates.length, duplicates },
-      skipped
+      { entryCount: entries.length, groupCount: all.length, duplicates },
+      { skipped, source, notes }
     );
   },
 
@@ -367,6 +476,8 @@ function handleMessage(msg) {
           // 特定の行が読めなかったときだけ、除外して続ける方法を添える
           const hint = err.index === undefined ? '' : '\n読めない行を除外して続ける場合は、skipInvalid: true を渡してください。';
           respond(id, errorResult(`入力データを読めませんでした。${err.message}${hint}`));
+        } else if (err instanceof FileAccessError) {
+          respond(id, errorResult(`入力ファイルを読めませんでした。${err.message}`));
         } else {
           respond(id, errorResult(`処理中にエラーが発生しました: ${err.message}`));
         }

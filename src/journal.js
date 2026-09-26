@@ -42,19 +42,20 @@ function parseDate(value, index) {
 /**
  * 入力日時を読む。オフセット付きならその地方時をそのまま採る。
  * 「何時に打ったか」を見たいので、UTC へ寄せずに現地の時刻を保つ。
+ * 日付だけのとき（会計ソフトの「入力日」など）は時刻を null にする。遡及入力の判定には使えるが、営業時間外の判定には使わない。
  */
 function parseEnteredAt(value, index) {
   if (value === undefined || value === null || value === '') return null;
   const m = String(value).match(
-    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:?\d{2})?$/
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:?\d{2})?)?$/
   );
   if (!m) throw new JournalError(`entered_at の形式が読めません: ${value}`, index);
   const [, y, mo, d, h, mi, s] = m;
   return {
     raw: String(value),
     date: `${y}-${mo}-${d}`,
-    hour: Number(h),
-    minute: Number(mi),
+    hour: h === undefined ? null : Number(h),
+    minute: mi === undefined ? null : Number(mi),
     second: Number(s ?? 0),
     dow: new Date(`${y}-${mo}-${d}T00:00:00Z`).getUTCDay(),
   };
@@ -94,9 +95,13 @@ function normalizeEntry(entry, index) {
   const lines = normalizeLines(entry, index);
   const debitTotal = lines.reduce((a, l) => a + l.debit, 0);
   const creditTotal = lines.reduce((a, l) => a + l.credit, 0);
+  const givenId = entry.id ?? entry.voucher_no;
+  const hasId = givenId !== undefined && givenId !== null && String(givenId).trim() !== '';
 
   return {
-    id: String(entry.id ?? entry.voucher_no ?? `#${index + 1}`),
+    id: hasId ? String(givenId) : `#${index + 1}`,
+    // 伝票番号が入力にあったか。連番を振り直した「#n」を欠番の判定に混ぜないため
+    hasId,
     index,
     date: entry.date,
     dateObj: parseDate(entry.date, index),

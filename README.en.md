@@ -2,7 +2,7 @@
 
 A dependency-free MCP server for journal entry testing (JET).
 
-It takes journal entries from a general ledger, applies 11 screening rules, and returns them ordered by the sequence a human should review them in. *Shiwake* (仕訳) is the Japanese word for a journal entry.
+It takes journal entries from a general ledger, applies 14 screening rules, and returns them ordered by the sequence a human should review them in. *Shiwake* (仕訳) is the Japanese word for a journal entry.
 
 [日本語](README.md)
 
@@ -53,6 +53,22 @@ npm run demo
 
 To run a clone of this repository instead, set `command` to `node` and `args` to `["/path/to/shiwake-mcp/src/server.js"]`.
 
+### Passing a large ledger as a file
+
+Beyond a few hundred entries, pass a file path instead of listing entries in the conversation. Listing them means the model has to write every entry out, which does not fit at tens of thousands of entries.
+
+Name the folders the server may read with `--data-dir` at startup (repeatable; `SHIWAKE_DATA_DIR` works too):
+
+```bash
+claude mcp add shiwake -- npx -y shiwake-mcp --data-dir /path/to/ledgers
+```
+
+In Claude Desktop, use `"args": ["-y", "shiwake-mcp", "--data-dir", "/path/to/ledgers"]`.
+
+Files outside those folders are never opened, even when the model asks for them. Symbolic links and junctions are resolved first, so a link pointing outside is refused too.
+
+Tools then take `file` instead of `journals`. Relative paths resolve against the first allowed folder. Accepted formats are `.json` and `.csv` (UTF-8 or Shift_JIS), up to 256 MB. In a local measurement, 383,000 entries (a 76 MB CSV) took about 9 seconds and produced a response of about 80,000 characters.
+
 ## Tools
 
 | Tool | Returns |
@@ -67,6 +83,16 @@ Entries accept either a simple form (`debit_account` / `credit_account` / `amoun
 
 If a single entry cannot be read, the whole call stops by default and reports which entry failed and why. Pass `skipInvalid: true` to exclude unreadable entries and carry on; they come back in `invalidRows` with their position, ID and reason.
 
+`entered_at` may be a date without a time. It then counts for `backdated` but not for `after_hours`.
+
+`screen_journals` returns individual findings only for the top `top` entries (50 by default); the counts always cover every entry. Pass `allFindings: true` for all of them. `check_balance` and `detect_duplicates` list up to 200 items by default.
+
+### Reading CSV
+
+CSV exported from accounting software can be passed as is. Column names are matched automatically against common Japanese headers (日付・取引日・伝票日付, 借方勘定科目・借方科目, 借方金額・貸方金額 or 金額, 摘要, 伝票番号, 入力日時, and so on), ignoring full-width/half-width differences, spaces and bracketed notes such as (税込). When a column is not found, name it with `columns`, for example `{ "date": "伝票日付", "amount": "金額(税込)" }`. The mapping actually used comes back in `source.columnsUsed`.
+
+Rows sharing a voucher number and date become one entry. The 諸口 (sundry) counter-account used for compound entries is dropped when its debits and credits match within the voucher, and kept when they do not, so an imbalance is not hidden. Dates such as 2026/3/31, 20260331, R8.3.31 and 令和8年3月31日 are read; △ and parentheses mark negative amounts. A title row above the header is skipped. Errors and exclusions report the CSV row number.
+
 ## Rules
 
 | ID | Severity | What it indicates |
@@ -75,6 +101,7 @@ If a single entry cannot be read, the whole call stops by default and reports wh
 | `self_approval` | high | Segregation of duties is not operating |
 | `threshold_avoidance` | high | Splitting entries to stay under an approval limit |
 | `duplicate` | medium | Double posting, or a legitimate recurring entry |
+| `reversal` | medium | A reversal or correction; pairs across the year end lead to a cut-off check |
 | `backdated` | medium | Cut-off error or retrospective posting |
 | `period_end_large` | medium | Where earnings management would appear first |
 | `rare_account_pair` | medium | Processing outside the normal transaction flow |
@@ -82,6 +109,8 @@ If a single entry cannot be read, the whole call stops by default and reports wh
 | `after_hours` | low | Weak alone, meaningful in combination |
 | `round_amount` | low | Estimates, approximations, reclassifications |
 | `missing_description` | low | Audit trail quality |
+| `description_keyword` | low | After-the-fact adjustments, entries whose content is not settled |
+| `voucher_gap` | low | Deleted or voided vouchers, or an incomplete export |
 
 `threshold_avoidance` and `period_end_large` stay dormant unless `approvalThresholds` and `fiscalYearEnd` are supplied. A rule firing blindly produces false positives, so it stops explicitly instead.
 
@@ -90,6 +119,12 @@ If a single entry cannot be read, the whole call stops by default and reports wh
 `weekend_or_holiday` also recognises Japanese national holidays, including substitute holidays and the in-between citizens' holiday, for 2000–2099. They are computed from the Public Holiday Act rather than a downloaded list, and the computation matches the Cabinet Office list for every day from 2000 to 2027. Company-specific holidays such as the New Year break go in `holidays`. For ledgers outside Japan, pass `japaneseHolidays: false`.
 
 `duplicate` and `rare_account_pair` sort the accounts on each side before comparing, so the order of lines within an entry does not change the result.
+
+`reversal` pairs an entry with one that swaps its debit and credit accounts for the same amount within 30 days (`reversalWindowDays`), and reports both with each other's voucher number. Each entry joins at most one pair. A pair crossing the year end is noted in the message, but its severity is not raised, because opening reversals of accruals take the same shape.
+
+`description_keyword` looks for 修正, 訂正, 取消, 調整, 仮計上 and 不明 by default. `descriptionKeywords` replaces the list; an empty list turns the rule off. The single character 仮 is left out because it matches accounts such as 仮払金 far too often.
+
+`voucher_gap` splits each voucher number into a prefix and a trailing number (JV-0382 becomes JV- and 382) and looks for breaks in the sequence per prefix. What is missing is an entry that is not there, so gaps are listed on their own and do not add to any entry's score. Prefixes whose range is more than half empty are treated as not sequentially numbered and skipped, as are entries without a voucher number.
 
 ## On Benford analysis
 
@@ -118,7 +153,7 @@ It is not a basis for forming an audit opinion or supporting a tax filing.
 
 Everything in `examples/` is synthetic, generated from a fixed seed. `.gitignore` excludes `*.csv`, `*.xlsx`, `journals.json` and `/data/` as a guard against committing real ledger data.
 
-The server makes no network calls. It reads stdin and writes stdout.
+The server makes no network calls. It reads stdin, plus `.json` and `.csv` files inside the folders allowed with `--data-dir`. It writes stdout only, never files.
 
 ## Tests
 
@@ -126,7 +161,7 @@ The server makes no network calls. It reads stdin and writes stdout.
 npm test
 ```
 
-67 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
+102 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
 
 ## License
 

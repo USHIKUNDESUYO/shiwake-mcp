@@ -105,6 +105,30 @@ test('空配列は落とす', () => {
   assert.throws(() => normalizeJournals([]), JournalError);
 });
 
+test('entered_at は日付だけでも読め、そのときは時刻を持たない', () => {
+  const [e] = normalizeJournals([
+    { date: '2026-01-14', entered_at: '2026-02-20', debit_account: 'A', credit_account: 'B', amount: 1 },
+  ]);
+  assert.equal(e.enteredAt.date, '2026-02-20');
+  assert.equal(e.enteredAt.hour, null);
+});
+
+test('伝票番号が無い・空のときは #n を振り、入力にあったかどうかを hasId に残す', () => {
+  const entries = normalizeJournals([
+    { id: 'JV-1', date: '2026-01-14', debit_account: 'A', credit_account: 'B', amount: 1 },
+    { id: '', date: '2026-01-14', debit_account: 'A', credit_account: 'B', amount: 1 },
+    { date: '2026-01-14', debit_account: 'A', credit_account: 'B', amount: 1 },
+  ]);
+  assert.deepEqual(
+    entries.map((e) => [e.id, e.hasId]),
+    [
+      ['JV-1', true],
+      ['#2', false],
+      ['#3', false],
+    ]
+  );
+});
+
 test('除外モードでは読めない行だけを外し、何件目か・伝票番号・理由を返す', () => {
   const { entries, skipped } = normalizeJournalsSkippingInvalid([
     { id: 'OK1', date: '2026-01-14', debit_account: 'A', credit_account: 'B', amount: 100 },

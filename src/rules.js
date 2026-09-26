@@ -11,6 +11,9 @@ import { japaneseHolidayName } from './holidays.js';
 
 const SEVERITY_SCORE = { high: 10, medium: 5, low: 2 };
 
+/** 重複仕訳の検出に添える、相方の伝票番号の上限。 */
+const SIBLING_IDS_LIMIT = 20;
+
 const DEFAULT_OPTIONS = {
   businessHours: [9, 18],
   holidays: [],
@@ -26,6 +29,9 @@ const DEFAULT_OPTIONS = {
   rareAccountPairMaxCount: 2,
   rarePairMinSampleSize: 50,
   backdatedDaysThreshold: 30,
+  reversalWindowDays: 30,
+  descriptionKeywords: ['修正', '訂正', '取消', '調整', '仮計上', '不明'],
+  voucherGapMaxMissingRatio: 0.5,
 };
 
 function resolveOptions(options = {}) {
@@ -168,15 +174,85 @@ const RULES = [
       const out = [];
       for (const [key, group] of groups) {
         if (group.length < 2) continue;
+        // 相方の伝票番号は先頭から SIBLING_IDS_LIMIT 件まで。同じ仕訳が数百件並ぶ元帳で、1件ごとに全員の番号を持たせると応答が膨らむ
+        const head = group.slice(0, SIBLING_IDS_LIMIT + 1).map((g) => g.id);
         for (const e of group) {
           out.push(
             finding('duplicate', 'medium', e, `同一条件の仕訳が ${group.length} 件あります`, {
               key,
               groupSize: group.length,
-              siblingIds: group.filter((g) => g.id !== e.id).map((g) => g.id),
+              siblingIds: head.filter((id) => id !== e.id).slice(0, SIBLING_IDS_LIMIT),
             })
           );
         }
+      }
+      return out;
+    },
+  },
+
+  {
+    id: 'reversal',
+    title: '取消・訂正仕訳',
+    severity: 'medium',
+    rationale:
+      '同じ金額で借方と貸方を入れ替えた仕訳が、近い日付にある組。誤りの取消か訂正で、期末をまたぐ組は期間帰属の確認につながる。期首の洗替仕訳もこの形になるため、期末をまたいでも重要度は上げない。',
+    run(entries, o) {
+      const keyOf = (amount, dr, cr) => `${amount}|${dr}|${cr}`;
+      const byKey = new Map();
+      for (const e of entries) {
+        const [dr, cr] = accountSides(e);
+        if (e.amount <= 0 || dr === cr) continue;
+        const key = keyOf(e.amount, dr, cr);
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(e);
+      }
+
+      // 日付順に見て、貸借を入れ替えた同額の仕訳のうち、期間内でいちばん近い前のものと組にする。1件は1組にしか入れない
+      const paired = new Set();
+      const out = [];
+      const chronological = [...entries].sort((a, b) => a.dateObj - b.dateObj || a.index - b.index);
+      for (const later of chronological) {
+        if (paired.has(later.index)) continue;
+        const [dr, cr] = accountSides(later);
+        if (later.amount <= 0 || dr === cr) continue;
+        let original = null;
+        let originalLag = Infinity;
+        for (const c of byKey.get(keyOf(later.amount, cr, dr)) ?? []) {
+          if (paired.has(c.index)) continue;
+          const lag = daysBetween(c.dateObj, later.dateObj);
+          if (lag < 0 || lag > o.reversalWindowDays || (lag === 0 && c.index > later.index)) continue;
+          if (lag < originalLag || (lag === originalLag && c.index > original.index)) {
+            original = c;
+            originalLag = lag;
+          }
+        }
+        if (!original) continue;
+        paired.add(original.index);
+        paired.add(later.index);
+
+        let crossing = null;
+        if (o.fiscalYearEnd) {
+          const fye = fiscalYearEndFor(original.dateObj, o.fiscalYearEnd);
+          if (later.dateObj > fye) crossing = fye.toISOString().slice(0, 10);
+        }
+        const note = crossing ? `（期末 ${crossing} をまたいでいます）` : '';
+        const detail = { lagDays: originalLag, crossesPeriodEnd: crossing !== null, periodEnd: crossing };
+        out.push(
+          finding(
+            'reversal',
+            'medium',
+            original,
+            `${originalLag} 日後の ${later.id} で、同じ金額の貸借を入れ替えた仕訳があります${note}`,
+            { ...detail, pairId: later.id, role: 'original' }
+          ),
+          finding(
+            'reversal',
+            'medium',
+            later,
+            `${originalLag} 日前の ${original.id} と同じ金額で、借方と貸方が入れ替わっています${note}`,
+            { ...detail, pairId: original.id, role: 'reversal' }
+          )
+        );
       }
       return out;
     },
@@ -304,7 +380,7 @@ const RULES = [
     run(entries, o) {
       const [open, close] = o.businessHours;
       return entries
-        .filter((e) => e.enteredAt && (e.enteredAt.hour < open || e.enteredAt.hour >= close))
+        .filter((e) => e.enteredAt?.hour != null && (e.enteredAt.hour < open || e.enteredAt.hour >= close))
         .map((e) => {
           const hh = String(e.enteredAt.hour).padStart(2, '0');
           const mm = String(e.enteredAt.minute).padStart(2, '0');
@@ -350,6 +426,75 @@ const RULES = [
       return entries
         .filter((e) => e.description.trim() === '')
         .map((e) => finding('missing_description', 'low', e, '摘要が入力されていません'));
+    },
+  },
+
+  {
+    id: 'description_keyword',
+    title: '摘要のキーワード',
+    severity: 'low',
+    rationale:
+      '摘要に「修正」「訂正」「取消」「調整」「仮計上」「不明」などの語を含む仕訳。事後の手直しや、内容の定まっていない計上を示す。語は descriptionKeywords で差し替えられる。',
+    run(entries, o) {
+      const words = o.descriptionKeywords.filter((w) => typeof w === 'string' && w !== '');
+      if (!words.length) return [];
+      const out = [];
+      for (const e of entries) {
+        const hit = words.filter((w) => e.description.includes(w));
+        if (hit.length === 0) continue;
+        out.push(
+          finding('description_keyword', 'low', e, `摘要に「${hit.join('」「')}」が含まれます`, { keywords: hit })
+        );
+      }
+      return out;
+    },
+  },
+
+  {
+    id: 'voucher_gap',
+    title: '伝票番号の欠番',
+    severity: 'low',
+    rationale:
+      '伝票番号の連番が途切れている箇所。削除・取消された伝票か、出力の漏れを示す。欠けているのは仕訳そのものなので、前後の仕訳のスコアには入れず、欠番の一覧として返す。',
+    run(entries, o) {
+      // 伝票番号を「頭の文字」と「末尾の数字」に分け、頭の文字ごとに連番を見る（JV-0382 → JV- と 382）
+      const groups = new Map();
+      for (const e of entries) {
+        if (!e.hasId) continue;
+        const m = e.id.match(/^(.*?)(\d+)$/);
+        if (!m) continue;
+        const [, prefix, digits] = m;
+        if (!groups.has(prefix)) groups.set(prefix, new Map());
+        groups.get(prefix).set(Number(digits), digits.length);
+      }
+
+      const out = [];
+      for (const [prefix, widths] of groups) {
+        const numbers = [...widths.keys()].sort((a, b) => a - b);
+        if (numbers.length < 2) continue;
+        const span = numbers[numbers.length - 1] - numbers[0] + 1;
+        // 範囲の半分以上が欠けているなら、連番で振った番号ではないとみなして見ない
+        if ((span - numbers.length) / span > o.voucherGapMaxMissingRatio) continue;
+        for (let i = 1; i < numbers.length; i += 1) {
+          const prev = numbers[i - 1];
+          const next = numbers[i];
+          if (next - prev <= 1) continue;
+          const width = widths.get(prev);
+          const label = (n) => `${prefix}${String(n).padStart(width, '0')}`;
+          const missing = next - prev - 1;
+          out.push(
+            finding('voucher_gap', 'low', null, `伝票番号 ${label(prev)} の次が ${label(next)} です（${missing} 件欠番）`, {
+              prefix,
+              after: label(prev),
+              before: label(next),
+              missingCount: missing,
+              missingFrom: label(prev + 1),
+              missingTo: label(next - 1),
+            })
+          );
+        }
+      }
+      return out;
     },
   },
 ];

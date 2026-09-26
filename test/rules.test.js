@@ -83,6 +83,16 @@ test('duplicate: 同一条件のものを全件、相方のIDつきで返す', (
   assert.deepEqual(result.findings[0].detail.siblingIds, ['D2']);
 });
 
+test('duplicate: 同じ仕訳が大量に並んでも、相方の伝票番号は20件までにする', () => {
+  const journals = [];
+  for (let i = 0; i < 30; i += 1) journals.push({ ...base, id: `D${i}` });
+  const result = screen(normalizeJournals(journals), { rules: ['duplicate'] });
+  assert.equal(result.findings.length, 30);
+  assert.equal(result.findings[0].detail.groupSize, 30);
+  assert.equal(result.findings[0].detail.siblingIds.length, 20);
+  assert.ok(!result.findings[0].detail.siblingIds.includes('D0'));
+});
+
 test('duplicate: 明細の行の順番だけが違う同じ仕訳も重複として拾う', () => {
   const lines = [
     { account: '外注費', debit: 1000000 },
@@ -261,6 +271,97 @@ test('読めない仕訳を除外して index が飛んでも、上位の一覧�
       ['KEEP1', 0],
     ]
   );
+});
+
+test('reversal: 同じ金額で貸借が逆の組を、両方に相手の伝票番号を添えて拾う', () => {
+  const entries = normalizeJournals([
+    { ...base, id: 'SALE', date: '2026-01-10', debit_account: '売掛金', credit_account: '売上高', amount: 2350000 },
+    { ...base, id: 'CANCEL', date: '2026-01-24', debit_account: '売上高', credit_account: '売掛金', amount: 2350000 },
+    { ...base, id: 'OTHER', date: '2026-01-24', debit_account: '売上高', credit_account: '売掛金', amount: 999 },
+  ]);
+  const result = screen(entries, { rules: ['reversal'] });
+  assert.deepEqual(
+    result.findings.map((f) => [f.entryId, f.detail.pairId, f.detail.lagDays, f.detail.role]),
+    [
+      ['SALE', 'CANCEL', 14, 'original'],
+      ['CANCEL', 'SALE', 14, 'reversal'],
+    ]
+  );
+});
+
+test('reversal: 期間を超えた組は拾わず、期末をまたぐ組は重要度を変えずに理由へ書き添える', () => {
+  const found = (journals, options) => screen(normalizeJournals(journals), { rules: ['reversal'], ...options }).findings;
+  const far = found([
+    { ...base, id: 'A', date: '2026-01-01', debit_account: '売掛金', credit_account: '売上高', amount: 5000 },
+    { ...base, id: 'B', date: '2026-03-01', debit_account: '売上高', credit_account: '売掛金', amount: 5000 },
+  ]);
+  assert.equal(far.length, 0);
+
+  const crossing = found(
+    [
+      { ...base, id: 'A', date: '2026-03-27', debit_account: '売掛金', credit_account: '売上高', amount: 5000 },
+      { ...base, id: 'B', date: '2026-04-03', debit_account: '売上高', credit_account: '売掛金', amount: 5000 },
+    ],
+    { fiscalYearEnd: '03-31' }
+  );
+  assert.equal(crossing.length, 2);
+  assert.equal(crossing[0].detail.crossesPeriodEnd, true);
+  assert.equal(crossing[0].severity, 'medium');
+  assert.match(crossing[1].message, /期末 2026-03-31 をまたいでいます/);
+});
+
+test('reversal: 1件は1組にしか入れず、同じ向きの重複どうしは組にしない', () => {
+  // R1 は近いほうの A2 と組になる。R2 は A2 がもう組になっているので、残った A1 と組になる
+  const found = hits(
+    [
+      { ...base, id: 'A1', date: '2026-01-10', debit_account: '売掛金', credit_account: '売上高', amount: 700 },
+      { ...base, id: 'A2', date: '2026-01-10', debit_account: '売掛金', credit_account: '売上高', amount: 700 },
+      { ...base, id: 'R1', date: '2026-01-12', debit_account: '売上高', credit_account: '売掛金', amount: 700 },
+      { ...base, id: 'R2', date: '2026-01-14', debit_account: '売上高', credit_account: '売掛金', amount: 700 },
+    ],
+    'reversal'
+  );
+  assert.deepEqual(found, ['A2', 'R1', 'A1', 'R2']);
+});
+
+test('description_keyword: 既定の語を拾い、descriptionKeywords で差し替え、空の配列なら止まる', () => {
+  const journals = [
+    { ...base, id: 'FIX', description: '前月分の売上修正' },
+    { ...base, id: 'TEMP', description: '仮払金精算' }, // 「仮」1文字は既定の語に入れていない
+    { ...base, id: 'PLAIN', description: '通常取引' },
+  ];
+  assert.deepEqual(hits(journals, 'description_keyword'), ['FIX']);
+  assert.deepEqual(hits(journals, 'description_keyword', { descriptionKeywords: ['精算'] }), ['TEMP']);
+  assert.deepEqual(hits(journals, 'description_keyword', { descriptionKeywords: [] }), []);
+});
+
+test('voucher_gap: 頭の文字ごとに連番の飛びを拾い、仕訳のスコアには入れない', () => {
+  const journals = ['JV-0001', 'JV-0002', 'JV-0005', 'JV-0006', 'AP-10', 'AP-11'].map((id) => ({ ...base, id }));
+  const result = screen(normalizeJournals(journals), { rules: ['voucher_gap'] });
+  assert.equal(result.findings.length, 1);
+  const [gap] = result.findings;
+  assert.equal(gap.entryId, null);
+  assert.deepEqual(
+    [gap.detail.after, gap.detail.before, gap.detail.missingCount, gap.detail.missingFrom, gap.detail.missingTo],
+    ['JV-0002', 'JV-0005', 2, 'JV-0003', 'JV-0004']
+  );
+  assert.equal(result.ranked.length, 0);
+  assert.equal(result.summary.byRule.voucher_gap, 1);
+});
+
+test('voucher_gap: 連番でない番号（範囲の半分以上が欠ける）と、伝票番号の無い仕訳は見ない', () => {
+  const sparse = ['X-1', 'X-50', 'X-99'].map((id) => ({ ...base, id }));
+  assert.equal(screen(normalizeJournals(sparse), { rules: ['voucher_gap'] }).findings.length, 0);
+
+  // 伝票番号が無い仕訳には #1, #2… を振るが、これは欠番の判定に混ぜない
+  const [first, , third] = normalizeJournals([{ ...base }, { ...base }, { ...base }]);
+  assert.equal(screen([first, third], { rules: ['voucher_gap'] }).findings.length, 0);
+});
+
+test('入力日時が日付だけの仕訳は、営業時間外としては拾わず、遡及入力としては拾う', () => {
+  const journals = [{ ...base, id: 'DATEONLY', date: '2026-01-14', entered_at: '2026-03-01' }];
+  assert.deepEqual(hits(journals, 'after_hours'), []);
+  assert.deepEqual(hits(journals, 'backdated'), ['DATEONLY']);
 });
 
 test('スコアは重要度の合計で、高い順に並ぶ', () => {

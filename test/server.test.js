@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -12,9 +13,9 @@ const SERVER = join(here, '..', 'src', 'server.js');
  * サーバーを子プロセスとして起こし、JSON-RPC を行区切りで投げて応答を集める。
  * MCP クライアントが実際にやることと同じ経路を通す。
  */
-function callServer(messages, { expect = messages.length } = {}) {
+function callServer(messages, { expect = messages.length, args = [], env = process.env } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [SERVER], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [SERVER, ...args], { stdio: ['pipe', 'pipe', 'pipe'], env });
     const responses = [];
     let buffer = '';
     let stderr = '';
@@ -174,6 +175,69 @@ test('skipInvalid を渡すと、読めない行を除外して続け、除外�
   assert.equal(payload.summary.entryCount, 2);
   assert.equal(payload.invalidRowCount, 1);
   assert.deepEqual(payload.invalidRows.map((r) => [r.id, r.index]), [['NEG', 2]]);
+});
+
+const toolCall = (name, args) => ({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } });
+
+test('file で許可フォルダの CSV を読み、読み込み元・列の当て方・CSV の行番号を返す', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'shiwake-srv-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(
+    join(dir, 'ledger.csv'),
+    ['伝票番号,日付,借方科目,貸方科目,金額,摘要', 'V-1,2026/01/14,仕入高,買掛金,123456,通常', 'V-2,2026/01/14,現金,売上高,-5,マイナス'].join('\n')
+  );
+  const [, res] = await callServer([init, toolCall('screen_journals', { file: 'ledger.csv', skipInvalid: true })], {
+    expect: 2,
+    args: ['--data-dir', dir],
+  });
+  assert.ok(!res.result.isError, res.result.content[0].text);
+  assert.match(res.result.content[0].text, /ファイル ledger\.csv を読みました（CSV 2 行 → 仕訳 2 件）/);
+  const payload = JSON.parse(res.result.content[1].text);
+  assert.equal(payload.source.columnsUsed.date, '日付');
+  assert.equal(payload.summary.entryCount, 1);
+  assert.equal(payload.invalidRows[0].csvRow, 3);
+});
+
+test('許可フォルダの外と、許可フォルダの指定が無いときは読まない', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'shiwake-srv-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const outsideFile = join(here, '..', 'package.json');
+
+  const [, outside] = await callServer([init, toolCall('check_balance', { file: outsideFile })], {
+    expect: 2,
+    args: ['--data-dir', dir],
+  });
+  assert.equal(outside.result.isError, true);
+  assert.match(outside.result.content[0].text, /外にあるファイルは読みません/);
+
+  const [, noDir] = await callServer([init, toolCall('check_balance', { file: 'ledger.csv' })], {
+    expect: 2,
+    env: { ...process.env, SHIWAKE_DATA_DIR: '' },
+  });
+  assert.equal(noDir.result.isError, true);
+  assert.match(noDir.result.content[0].text, /--data-dir/);
+});
+
+test('journals と file を両方渡すと止める', async () => {
+  const [, res] = await callServer([init, toolCall('check_balance', { journals: sample, file: 'x.csv' })], { expect: 2 });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /どちらか一方/);
+});
+
+test('screen_journals は既定で上位の仕訳に関わる検出だけを返し、allFindings で全件を返す', async () => {
+  const journals = [];
+  for (let i = 0; i < 5; i += 1) {
+    journals.push({ id: `E${i}`, date: '2026-01-14', debit_account: '仕入高', credit_account: '買掛金', amount: 1000 + i, description: '' });
+  }
+  const [, capped] = await callServer([init, toolCall('screen_journals', { journals, top: 2 })], { expect: 2 });
+  const payload = JSON.parse(capped.result.content[1].text);
+  assert.equal(payload.summary.findingCount, 5);
+  assert.equal(payload.findings.length, 2);
+  assert.equal(payload.findingsOmitted, 3);
+  assert.match(capped.result.content[0].text, /allFindings: true/);
+
+  const [, all] = await callServer([init, toolCall('screen_journals', { journals, top: 2, allFindings: true })], { expect: 2 });
+  assert.equal(JSON.parse(all.result.content[1].text).findings.length, 5);
 });
 
 test('benford_analysis の skipped（判定できない金額の件数）は、除外した行の一覧と混ざらない', async () => {
