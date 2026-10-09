@@ -453,6 +453,17 @@ function respondError(id, code, message) {
 }
 
 function handleMessage(msg) {
+  const objectMessage = msg !== null && typeof msg === 'object' && !Array.isArray(msg);
+  const hasId = objectMessage && Object.hasOwn(msg, 'id');
+  const validId = !hasId || typeof msg.id === 'string' ||
+    (typeof msg.id === 'number' && Number.isSafeInteger(msg.id));
+  const validParams = objectMessage && (!Object.hasOwn(msg, 'params') ||
+    (msg.params !== null && typeof msg.params === 'object' && !Array.isArray(msg.params)));
+  if (!objectMessage || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string' ||
+      !validId || !validParams) {
+    respondError(objectMessage && hasId && validId ? msg.id : null, -32600, 'Invalid Request');
+    return;
+  }
   const { id, method, params } = msg;
   const isNotification = id === undefined || id === null;
 
