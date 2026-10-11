@@ -17,7 +17,7 @@ import { screen, RULES, accountSides, duplicateKey } from './rules.js';
 import { benfordAnalysis } from './benford.js';
 import { dataDirsFrom, resolveAllowedFile, readJournalFile, FileAccessError } from './files.js';
 
-const SERVER_INFO = { name: 'shiwake-mcp', version: '0.3.0' };
+const SERVER_INFO = { name: 'shiwake-mcp', version: '0.3.1' };
 const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const LATEST_PROTOCOL = SUPPORTED_PROTOCOLS[0];
 
