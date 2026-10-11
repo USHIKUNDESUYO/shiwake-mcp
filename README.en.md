@@ -168,7 +168,7 @@ The server makes no network calls. It reads stdin, plus `.json` and `.csv` files
 npm test
 ```
 
-107 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
+119 tests. The MCP server tests spawn the server as a child process and exchange real JSON-RPC messages over stdio.
 
 ## License
 
@@ -177,3 +177,5 @@ MIT
 ## Author
 
 Ushio Hoshino, CPA (Japan)
+
+See the [official profile and free accounting tools](https://invaders.co.jp/members/hoshino-ushio.html).
