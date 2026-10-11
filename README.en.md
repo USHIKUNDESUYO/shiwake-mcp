@@ -18,9 +18,12 @@ The MCP stdio transport is newline-delimited JSON-RPC 2.0. It takes about 200 li
 
 Requires Node.js 20 or later.
 
+The npm release 0.3.0 does not include the JSON-RPC input guard added on GitHub. Use the fixed source below for the guarded version. Its published source passed 119 tests.
+
 ```bash
 git clone https://github.com/USHIKUNDESUYO/shiwake-mcp.git
 cd shiwake-mcp
+git checkout 3f053b2cff7d003069186fee071bce7cda1c5989
 npm test
 ```
 
@@ -42,16 +45,16 @@ npm run demo
 {
   "mcpServers": {
     "shiwake": {
-      "command": "npx",
-      "args": ["-y", "shiwake-mcp"]
+      "command": "node",
+      "args": ["/path/to/shiwake-mcp/src/server.js"]
     }
   }
 }
 ```
 
-`npx` downloads this one package and nothing else, because there are no dependencies.
+Replace `/path/to/shiwake-mcp` with the absolute path to the clone above. Node.js runs the verified source directly, without using the npm release.
 
-To run a clone of this repository instead, set `command` to `node` and `args` to `["/path/to/shiwake-mcp/src/server.js"]`.
+For Windows JSON settings, use forward slashes in paths or escape each backslash as `\\`.
 
 ### Passing a large ledger as a file
 
@@ -60,10 +63,10 @@ Beyond a few hundred entries, pass a file path instead of listing entries in the
 Name the folders the server may read with `--data-dir` at startup (repeatable; `SHIWAKE_DATA_DIR` works too):
 
 ```bash
-claude mcp add shiwake -- npx -y shiwake-mcp --data-dir /path/to/ledgers
+claude mcp add shiwake -- node "/path/to/shiwake-mcp/src/server.js" --data-dir "/path/to/ledgers"
 ```
 
-In Claude Desktop, use `"args": ["-y", "shiwake-mcp", "--data-dir", "/path/to/ledgers"]`.
+In Claude Desktop, use `"args": ["/path/to/shiwake-mcp/src/server.js", "--data-dir", "/path/to/ledgers"]`.
 
 Files outside those folders are never opened, even when the model asks for them. Symbolic links and junctions are resolved first, so a link pointing outside is refused too.
 

@@ -18,14 +18,27 @@ MCP の stdio トランスポートは、行区切りの JSON-RPC 2.0 です。S
 
 Node.js 20 以上が必要です。
 
+### 入力ガードを含むGitHub版を使う
+
+npmの配布版0.3.0には、GitHubへ追加したJSON-RPC入力ガードが含まれていません。入力形式が不正な場合にエラーを返して処理を続ける修正版は、次の固定ソースから使えます。外部ライブラリのインストールは不要です。
+
+```bash
+git clone https://github.com/USHIKUNDESUYO/shiwake-mcp.git
+cd shiwake-mcp
+git checkout 3f053b2cff7d003069186fee071bce7cda1c5989
+npm test
+```
+
+このcommitの公開ソースで119試験の成功を確認しています。下の接続例では、`/path/to/shiwake-mcp`をcloneしたフォルダーの絶対パスへ置き換えてください。Node.jsから直接起動するので、npm配布版は使いません。
+
 ### MCP サーバーとして繋ぐ
 
-npm に公開しているので、`npx` で起動できます。事前のインストールは要りません。ダウンロードされるのはこのパッケージ1つだけです。依存がないので、ほかには何も入りません。
+上で取得したGitHub版をNode.jsから起動します。
 
 Claude Code なら1行です。
 
 ```bash
-claude mcp add shiwake -- npx -y shiwake-mcp
+claude mcp add shiwake -- node "/path/to/shiwake-mcp/src/server.js"
 ```
 
 名前の前に `--scope project` を付けると、プロジェクト直下の `.mcp.json` に書き込まれ、チームで共有できます。
@@ -36,14 +49,14 @@ Claude Desktop は設定ファイル（`claude_desktop_config.json`）に追記�
 {
   "mcpServers": {
     "shiwake": {
-      "command": "npx",
-      "args": ["-y", "shiwake-mcp"]
+      "command": "node",
+      "args": ["/path/to/shiwake-mcp/src/server.js"]
     }
   }
 }
 ```
 
-バージョンを固定したい場合は `shiwake-mcp@0.1.0` のように指定します。コードを読んでから動かしたい場合は、リポジトリを clone して `"command": "node"`、`"args": ["/path/to/shiwake-mcp/src/server.js"]` と直接指定してください。
+WindowsのJSON設定では、パスの区切りに`/`を使うか、バックスラッシュを`\\`と2つ書いてください。
 
 ### 大きな元帳はファイルで渡す
 
@@ -52,10 +65,10 @@ Claude Desktop は設定ファイル（`claude_desktop_config.json`）に追記�
 サーバーが読んでよいフォルダを、起動時に `--data-dir` で指定します（何度でも指定できます。環境変数 `SHIWAKE_DATA_DIR` でも指定できます）。
 
 ```bash
-claude mcp add shiwake -- npx -y shiwake-mcp --data-dir /path/to/ledgers
+claude mcp add shiwake -- node "/path/to/shiwake-mcp/src/server.js" --data-dir "/path/to/ledgers"
 ```
 
-Claude Desktop なら `"args": ["-y", "shiwake-mcp", "--data-dir", "C:\\audit\\ledgers"]` です。
+Claude Desktop なら `"args": ["/path/to/shiwake-mcp/src/server.js", "--data-dir", "C:\\audit\\ledgers"]` です。
 
 指定したフォルダの外にあるファイルは、AI からパスを渡されても開きません。シンボリックリンクやジャンクションで外を指している場合も、たどった先で判定して読みません。
 
