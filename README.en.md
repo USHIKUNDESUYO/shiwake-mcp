@@ -18,6 +18,16 @@ The MCP stdio transport is newline-delimited JSON-RPC 2.0. It takes about 200 li
 
 Requires Node.js 20 or later.
 
+### Use the guarded npm release 0.3.1
+
+Version 0.3.1 includes the JSON-RPC input guard. The archive retrieved from npm matches the verified candidate. Three malformed requests were rejected, and a following valid initialization succeeded. With Node.js 20 or later, start the same version with:
+
+```bash
+npx -y shiwake-mcp@0.3.1
+```
+
+For Claude Code, use `claude mcp add shiwake -- npx -y shiwake-mcp@0.3.1`. For Claude Desktop, set `"command": "npx"` and `"args": ["-y", "shiwake-mcp@0.3.1"]`. To read ledger files, append `"--data-dir", "/path/to/ledgers"` to the arguments and replace the path with the intended folder. The initial download needs a network connection. The fixed-source test reproduction follows below.
+
 The npm release 0.3.0 does not include the JSON-RPC input guard added on GitHub. Use the fixed source below for the guarded version. Its published source passed 119 tests.
 
 ```bash
