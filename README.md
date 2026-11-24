@@ -6,6 +6,8 @@
 
 [English](README.en.md)
 
+[![USHIKUNDESUYO/shiwake-mcp MCP server](https://glama.ai/mcp/servers/USHIKUNDESUYO/shiwake-mcp/badges/score.svg)](https://glama.ai/mcp/servers/USHIKUNDESUYO/shiwake-mcp)
+
 ## 依存ライブラリを持たない理由
 
 `npm install` で入るものが1つもありません。`package.json` の `dependencies` は空です。
